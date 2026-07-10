@@ -3,8 +3,8 @@
 Milestones are sequenced by deliverable (not calendar), per the PRD. Each gates the next.
 
 ## Now (M1 — Capture core + memory index: "it remembers")
-- [ ] SwiftPM workspace skeleton: `scrollbackd` daemon target + `ScrollbackCore` lib + test target. Definition of done: `swift build` + `swift test` green; commands filled into CLAUDE.md; `/verify-setup` run.
-- [ ] Event-driven AX-tree capture spike: AX notifications + NSWorkspace app-switch + typing-pause triggers on the frontmost window; **no fixed-interval polling**. DoD: frontmost-window text captured on change at <5% avg CPU over a real hour.
+- [ ] Event-driven AX-tree capture spike: AX notifications + NSWorkspace app-switch + typing-pause triggers on the frontmost window; **no fixed-interval polling**. DoD: frontmost-window text captured on change at <5% avg CPU over a real hour. (Next up — the daemon skeleton, RetrievalStore seam, and models now exist to build on.)
+- [ ] Run `/verify-setup` now that `swift build`/`swift test` exist — turn the M1 gates into run→observe checks (incl. a fixture-driven capture harness).
 - [ ] Apple Vision OCR fallback for AX-opaque surfaces + per-app capability matrix. DoD: an Electron/canvas app that yields empty AX still produces text.
 - [ ] Default-on exclusions (password managers, banking, incognito, Claude window, secure-input, `NSWindowSharingNone`). DoD: excluded apps provably absent from the store.
 - [ ] Instrument deduplicated AX-text volume/hour (the derived-not-measured storage number).

@@ -15,12 +15,12 @@ Full product context: [PRD.md](PRD.md). Architecture & decisions: [tech-spec.md]
 - **Open core:** `scrollbackd` + `scrollback-mcp` under FSL-1.1-MIT; app shell + filing agents proprietary.
 
 ## Commands
-<!-- TODO: no project scaffolded yet — the SwiftPM/Xcode skeleton is the first /build task. Fill these once it compiles, then run /verify-setup. Expected shape: -->
 ```
-# swift build                    # build SPM targets (scrollbackd, scrollback-courier, core libs)
-# swift test                     # unit tests
-# xcodebuild -scheme Scrollback  # build the app shell
-# (lint) swiftlint               # optional; the PostToolUse hook runs it per-file if installed
+swift build                     # build SPM targets (ScrollbackCore lib, scrollbackd)
+swift test                      # run the test suite (XCTest)
+swift run scrollbackd           # run the capture daemon (skeleton for now)
+swiftlint                       # optional lint; PostToolUse hook runs it per-file if installed
+# xcodebuild -scheme Scrollback # (later, M4) build the menu-bar app shell — not created yet
 ```
 
 ## Architecture (the trust topology — this IS the privacy claim)
