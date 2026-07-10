@@ -8,9 +8,9 @@
 - PRD, tech-spec, scaffold, and guardrails committed (2 commits on `main`).
 
 ## Blocked / Open questions
-- Nothing blocking. `/verify-setup` was deferred until a build existed — that's now unblocked (it's the top task alongside the capture spike). Watch-list unchanged (pricing, FSL vs MIT, Otter ruling ~Jul 15, trademark).
+- Nothing blocking. Watch-list unchanged (pricing, FSL vs MIT, Otter ruling ~Jul 15, trademark).
 
 ## Next up
-- Run `/verify-setup` → real run→observe checks incl. a fixture-driven capture harness.
 - Apple Vision OCR fallback + per-app capability matrix.
 - Local embedding pipeline (llama.cpp + EmbeddingGemma) behind `RetrievalStore`; then the encrypted SQLite store (SQLCipher + SE-wrapped key).
+- Verify skill exists (`.claude/skills/verify/SKILL.md`, 5 checks, all green) — each new flow must replace its TODO stub there with a real run→observe check.

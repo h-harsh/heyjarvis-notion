@@ -38,7 +38,7 @@ swiftlint                       # optional lint; PostToolUse hook runs it per-fi
 - Purge = drop the whole weekly shard file (not row DELETEs) — makes "delete everything before X" instant and provable.
 
 ## Verification
-Never claim a task complete without observed-working proof. Once the project compiles, `/verify-setup` creates the project verify skill; until then, "done" means: it builds, its test runs, and the affected flow was driven by hand (e.g. capture actually flowed, or Claude actually recalled). `<5% average CPU` is a launch gate, not an aspiration — measure it.
+Never claim a task complete without observed-working proof. Run **`/verify`** (`.claude/skills/verify/SKILL.md`) — `/build` runs it automatically before reporting done. If `/verify` can't run, say so explicitly; never claim success on a clean compile alone. `<5% average CPU` is a launch gate, not an aspiration — measure it when the capture loop exists.
 
 ## Files to check first
 - `.ai/STATE.md` — where work stands right now (read at session start).
