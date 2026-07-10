@@ -1,0 +1,39 @@
+# Personal / machine-local Claude config (never commit)
+.claude/settings.local.json
+
+# Secrets
+.env
+.env.*
+secrets/
+
+# Captured user data & the on-device memory store (must NEVER be committed)
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.scrollback
+memory/
+captures/
+
+# Downloaded model weights (fetched at first launch, not vendored)
+*.gguf
+*.mlmodelc
+models/
+
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+Package.resolved
+
+# macOS
+.DS_Store
+*.swp
+
+# Build output & notarization artifacts
+build/
+dist/
+*.dmg
+*.app.zip
