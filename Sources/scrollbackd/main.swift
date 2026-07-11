@@ -17,6 +17,8 @@ let arguments = CommandLine.arguments.dropFirst()
 switch arguments.first {
 case "simulate":
     exit(runSimulation())
+case "search":
+    exit(runSearch(arguments.dropFirst().joined(separator: " ")))
 case "ax-dump":
     exit(runAXDump())
 case "ocr-dump":
@@ -29,11 +31,12 @@ case nil, "run":
 default:
     print("""
     scrollbackd \(scrollbackCoreVersion)
-    usage: scrollbackd [run|simulate|ax-dump|ocr-dump|--version]
-      run       (default) live event-driven capture → throwaway JSONL spike store
-      simulate  deterministic fixture replay through the real engine
-      ax-dump   one-shot: extract the frontmost window's AX text
-      ocr-dump  one-shot: screenshot + Vision-OCR the frontmost window
+    usage: scrollbackd [run|search|simulate|ax-dump|ocr-dump|--version]
+      run          (default) live event-driven capture → searchable store + JSONL spike
+      search "..."  hybrid retrieval over the captured store (no TCC needed)
+      simulate     deterministic fixture replay through the real engine
+      ax-dump      one-shot: extract the frontmost window's AX text
+      ocr-dump     one-shot: screenshot + Vision-OCR the frontmost window
     """)
     exit(64)
 }

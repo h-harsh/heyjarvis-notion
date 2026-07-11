@@ -260,7 +260,10 @@ func runDaemon() -> Never {
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
         ).appendingPathComponent("Scrollback/spike", isDirectory: true)
-        let sink = InstrumentedSink(inner: try JSONLSink(directory: supportDir))
+        // Persist into the searchable weekly-shard store, forwarding to the JSONL
+        // spike (human-inspectable). `scrollbackd search "..."` reads this store.
+        let catalog = try ShardedCatalog(directory: try scrollbackStoreDirectory())
+        let sink = CatalogStoreSink(catalog: catalog, inner: try JSONLSink(directory: supportDir))
         let config = CaptureConfig()
         let axExtractor = AXTextExtractor(maxTotalChars: config.maxTextLength)
         // AX-first, OCR-fallback via the per-app capability matrix. OCR only
@@ -279,15 +282,16 @@ func runDaemon() -> Never {
         // session's capture volume (raw vs deduped chars, chunks/hour).
         installShutdownHandler {
             runtime.shutdown()
-            sink.logVolume()
+            print("volume: \(sink.summary)")
         }
 
         if !CGPreflightScreenCaptureAccess() {
             print("note: Screen Recording not granted — OCR fallback inactive (AX-only). "
                 + "Grant it to capture AX-opaque apps; run `scrollbackd ocr-dump` to test.")
         }
-        print("capturing (event-driven) → \(sink.path)")
-        print("Ctrl-C to stop. This spike store is throwaway — plaintext JSONL, delete after M1.")
+        print("capturing (event-driven) → searchable store + JSONL spike")
+        print("Ctrl-C to stop. Then try:  scrollbackd search \"something you saw\"")
+        print("(plaintext for now — encryption + the embedding model land next.)")
         withExtendedLifetime((runtime, engine)) {
             RunLoop.main.run()
         }
