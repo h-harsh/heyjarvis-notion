@@ -35,9 +35,13 @@ final class AXTextExtractor: TextSnapshotProvider {
         var parts: [String] = []
         var nodesVisited = 0
         var charsCollected = 0
-        walk(window, depth: 0, parts: &parts, nodes: &nodesVisited, chars: &charsCollected)
+        var sawSecureField = false
+        walk(window, depth: 0, parts: &parts, nodes: &nodesVisited, chars: &charsCollected, sawSecure: &sawSecureField)
         let joined = parts.joined(separator: "\n")
-        return joined.isEmpty ? nil : CapturedText(text: joined, source: .ax, confidence: 1.0)
+        guard !joined.isEmpty else { return nil }
+        // Carry the secure-field signal so the layered provider won't OCR-fallback
+        // a window whose password field we just declined to read.
+        return CapturedText(text: joined, source: .ax, confidence: 1.0, containedSecureField: sawSecureField)
     }
 
     func focusedWindowTitle(pid: pid_t) -> String? {
@@ -69,7 +73,8 @@ final class AXTextExtractor: TextSnapshotProvider {
         depth: Int,
         parts: inout [String],
         nodes: inout Int,
-        chars: inout Int
+        chars: inout Int,
+        sawSecure: inout Bool
     ) {
         nodes += 1
         guard nodes <= maxNodes, depth <= maxDepth, chars <= maxTotalChars else { return }
@@ -81,8 +86,10 @@ final class AXTextExtractor: TextSnapshotProvider {
 
         // Never read secure fields — skip the whole subtree. Checks BOTH role
         // and subrole (a password field's role is "AXTextField", subrole
-        // "AXSecureTextField").
+        // "AXSecureTextField"). Record that we saw one so the OCR fallback can be
+        // suppressed for this window (a screenshot would recapture it).
         if AXCapturePolicy.isSecureField(role: attrs[kAXRoleAttribute], subrole: attrs[kAXSubroleAttribute]) {
+            sawSecure = true
             return
         }
 
@@ -96,7 +103,7 @@ final class AXTextExtractor: TextSnapshotProvider {
         }
 
         for child in childElements(element) {
-            walk(child, depth: depth + 1, parts: &parts, nodes: &nodes, chars: &chars)
+            walk(child, depth: depth + 1, parts: &parts, nodes: &nodes, chars: &chars, sawSecure: &sawSecure)
             if nodes > maxNodes || chars > maxTotalChars { return }
         }
     }

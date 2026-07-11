@@ -16,12 +16,13 @@ Observe: ends with `Build complete!` and exit code 0. Any compile error → fail
 
 ### 2. Tests
 Run: `swift test`
-Observe: final line `Executed N tests, with 0 failures` (N ≥ 29 today) and exit 0.
+Observe: final line `Executed N tests, with 0 failures` (N ≥ 51 today) and exit 0.
 This is where the load-bearing invariants are asserted with exact values:
 - `RankFusion` fuses to exact RRF scores and a deterministic tie-break order.
 - `CaptureEvent.provenance` defaults to `.untrustedAmbient` (the security invariant).
 - `AXCapturePolicy.isSecureField` treats subrole `AXSecureTextField` as secure — the never-read-passwords guard (a broken guard fails here, not in production).
 - `CaptureEngine`: episodes open/close on context change and idle, resume-after-idle reopen, app-driven content changes do NOT defeat idle, typing debounce (rolling + cleared-on-window-switch), per-episode hash dedup, clipboard verbatim capture, idle suppression (`idleProviderCalls == 0`), tsEnd never regresses, activity-gated fallback (never fixed-interval).
+- **OCR fallback matrix:** `AppCaptureCapabilities` strategy resolution; `OCRFallbackPolicy` fires OCR only on empty/thin AX (threshold boundary); `LayeredTextSnapshotProvider` — `ocrOnly` skips the AX walk, `axOnly` never screenshots, `axThenOCR` rescues a title-only window but never regresses below AX (prefer-longer, ties keep AX), and **refuses OCR when AX saw a secure field** (`containedSecureField` — the never-screenshot-a-password-window guard); OCR output labelled `.ocr`; `OCRTextAssembler` reading-order is a strict weak ordering — deterministic/permutation-independent on chained-within-epsilon staircases (the intransitive-comparator regression).
 Adding capture/store/filing code MUST add tests here — a green build alone never counts.
 
 ### 3. Lint (only if installed)
@@ -38,7 +39,7 @@ The binary replays a fixed workday fixture through the real `CaptureEngine` and 
 
 **Do NOT run bare `swift run scrollbackd` (no args) in automation.** On a machine where Accessibility is already granted it enters the capture run loop and never exits (it hangs the verify); on an ungranted machine it prints guidance and exits 3. Neither is a usable automated assertion — use `simulate`.
 
-**Manual (TCC-gated, founder's machine only, run by hand and reported explicitly):** `swift run scrollbackd ax-dump` → prints the frontmost window's extracted text (secure fields excluded — regression-guarded by the `AXCapturePolicyTests` unit test in gate #2); `swift run scrollbackd` → live JSONL capture in `~/Library/Application Support/Scrollback/spike/` (Ctrl-C flushes the final episode). State explicitly if these weren't run — never imply live capture was observed when only `simulate` ran.
+**Manual (TCC-gated, founder's machine only, run by hand and reported explicitly):** `swift run scrollbackd ax-dump` → prints the frontmost window's extracted text (secure fields excluded — regression-guarded by the `AXCapturePolicyTests` unit test in gate #2); `swift run scrollbackd ocr-dump` → screenshots + Vision-OCRs the frontmost window and prints the text (needs the **Screen Recording** grant; the image is discarded post-extraction — zero frames stored); `swift run scrollbackd` → live JSONL capture in `~/Library/Application Support/Scrollback/spike/` (Ctrl-C flushes the final episode). State explicitly if these weren't run — never imply live capture/OCR was observed when only `simulate` ran. The ScreenCaptureKit+Vision path and the async→sync bridge's runtime behaviour are only observable here, not in CI.
 
 ### 5. Capture/index code links NO networking (Never rule #1)
 Run: `grep -rnE 'URLSession|NWConnection|NWListener|NWBrowser|CFSocket|CFStream|getaddrinfo|SocketPort' Sources/scrollbackd Sources/ScrollbackCore`

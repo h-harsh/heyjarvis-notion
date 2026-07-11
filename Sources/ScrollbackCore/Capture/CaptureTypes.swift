@@ -20,18 +20,27 @@ public struct FrontmostContext: Sendable, Equatable {
 }
 
 /// A text snapshot plus how it was obtained. Returning `source`/`confidence`
-/// (rather than a bare `String`) lets the imminent OCR-fallback provider label
-/// its output honestly instead of the engine hardcoding `.ax` — OCR/ASR text
-/// carries semantic noise and must be distinguishable for ranking.
+/// (rather than a bare `String`) lets the OCR-fallback provider label its output
+/// honestly instead of the engine hardcoding `.ax` — OCR/ASR text carries
+/// semantic noise and must be distinguishable for ranking.
 public struct CapturedText: Sendable, Equatable {
     public let text: String
     public let source: CaptureSource
     public let confidence: Double
+    /// Set by the AX provider when it saw (and skipped) a secure field in this
+    /// window. Carries the never-read-passwords signal one hop further: the
+    /// layered provider refuses to OCR-fallback a window with a secure field, so
+    /// a whole-window screenshot can't recapture the credential surface the AX
+    /// walker deliberately protected. (Residual gap: an all-canvas login whose AX
+    /// is entirely empty has no signal to carry — that's covered by app-level
+    /// default exclusions, not here.)
+    public let containedSecureField: Bool
 
-    public init(text: String, source: CaptureSource, confidence: Double = 1.0) {
+    public init(text: String, source: CaptureSource, confidence: Double = 1.0, containedSecureField: Bool = false) {
         self.text = text
         self.source = source
         self.confidence = confidence
+        self.containedSecureField = containedSecureField
     }
 }
 

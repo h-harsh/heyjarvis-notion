@@ -262,14 +262,26 @@ func runDaemon() -> Never {
         ).appendingPathComponent("Scrollback/spike", isDirectory: true)
         let sink = try JSONLSink(directory: supportDir)
         let config = CaptureConfig()
-        let extractor = AXTextExtractor(maxTotalChars: config.maxTextLength)
-        let engine = CaptureEngine(provider: extractor, sink: sink, config: config)
-        let runtime = CaptureRuntime(engine: engine, extractor: extractor, idleThreshold: config.idleThreshold)
+        let axExtractor = AXTextExtractor(maxTotalChars: config.maxTextLength)
+        // AX-first, OCR-fallback via the per-app capability matrix. OCR only
+        // fires for AX-opaque surfaces (and only if Screen Recording is granted);
+        // rich-AX apps never pay for a screenshot. See LayeredTextSnapshotProvider.
+        let provider = LayeredTextSnapshotProvider(
+            ax: axExtractor,
+            ocr: VisionOCRExtractor(),
+            capabilities: AppCaptureCapabilities()
+        )
+        let engine = CaptureEngine(provider: provider, sink: sink, config: config)
+        let runtime = CaptureRuntime(engine: engine, extractor: axExtractor, idleThreshold: config.idleThreshold)
         runtime.start()
 
         // Flush the open episode on Ctrl-C / SIGTERM before exiting.
         installShutdownHandler { runtime.shutdown() }
 
+        if !CGPreflightScreenCaptureAccess() {
+            print("note: Screen Recording not granted — OCR fallback inactive (AX-only). "
+                + "Grant it to capture AX-opaque apps; run `scrollbackd ocr-dump` to test.")
+        }
         print("capturing (event-driven) → \(sink.path)")
         print("Ctrl-C to stop. This spike store is throwaway — plaintext JSONL, delete after M1.")
         withExtendedLifetime((runtime, engine)) {
@@ -301,7 +313,7 @@ func runAXDump() -> Int32 {
         print(String(normalized.prefix(400)))
         return 0
     } else {
-        print("no text extracted (empty AX tree? OCR fallback comes later in M1).")
+        print("no AX text (empty tree — likely an AX-opaque app; try `scrollbackd ocr-dump`).")
         return 2
     }
 }
