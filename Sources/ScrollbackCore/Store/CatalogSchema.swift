@@ -5,10 +5,14 @@ import Foundation
 /// applies the gap in one transaction and bumps the version. Never edit a shipped
 /// migration — add a new one.
 ///
-/// Schema mirrors tech-spec §2. `chunks_vec` (sqlite-vec `vec0`) is intentionally
-/// absent — it needs the sqlite-vec extension and lands with the embedding task
-/// as migration 2. Timestamps are REAL unix-epoch seconds; ids are TEXT UUIDs;
-/// `text_hash` is stored as hex TEXT (our SHA-256 hex) rather than BLOB.
+/// Schema mirrors tech-spec §2. Timestamps are REAL unix-epoch seconds; ids are TEXT
+/// UUIDs; `text_hash` is stored as hex TEXT (our SHA-256 hex) rather than BLOB.
+///
+/// Migration 2 adds `chunk_vectors` as a PLAIN int8 table (embedding + per-vector
+/// scale), read by the brute-force `VectorIndex`. The sqlite-vec `vec0` virtual table
+/// is a LATER migration once the extension is linked — it becomes an in-DB ANN index
+/// built from these durable int8 rows; `chunk_vectors` stays the source of truth (the
+/// `RetrievalStore`/`VectorIndex` hedge means feature code never depends on which).
 public enum CatalogSchema {
 
     public struct Migration: Sendable {
@@ -18,6 +22,7 @@ public enum CatalogSchema {
 
     public static let migrations: [Migration] = [
         Migration(version: 1, sql: v1),
+        Migration(version: 2, sql: v2),
     ]
 
     /// Highest known schema version (the target after a full migrate).
@@ -181,5 +186,19 @@ public enum CatalogSchema {
         autonomy        TEXT NOT NULL DEFAULT 'manual' CHECK(autonomy IN ('manual','earned_auto')),
         unedited_streak INTEGER NOT NULL DEFAULT 0
     );
+    """
+
+    /// Vector store: one int8 embedding per chunk, keyed for lazy per-model re-embed.
+    /// `embedding` is `dim` signed bytes; `scale` dequantizes (`float ≈ int8 * scale`).
+    /// CASCADE so a chunk's vector dies with it (and with a whole-shard purge).
+    private static let v2 = """
+    CREATE TABLE chunk_vectors (
+        chunk_id  TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+        model_id  TEXT NOT NULL,
+        dim       INTEGER NOT NULL,
+        scale     REAL NOT NULL,
+        embedding BLOB NOT NULL
+    );
+    CREATE INDEX idx_chunk_vectors_model ON chunk_vectors(model_id);
     """
 }

@@ -24,7 +24,19 @@ func runSearch(_ query: String) -> Int32 {
     do {
         let directory = try scrollbackStoreDirectory()
         let catalog = try ShardedCatalog(directory: directory)
-        let results = try catalog.search(MemoryQuery(text: trimmed, limit: 8))
+
+        // Semantic layer. The real EmbeddingGemma is an environment-blocked download;
+        // until it lands, `HashingEmbeddingProvider` is a LEXICAL fallback (shared words,
+        // not meaning) — so this fuses a vector list with keyword + recency but the
+        // semantic quality only arrives with the model (a one-line provider swap).
+        // Clearing the backlog here (cheap for the fallback) keeps the CLI self-contained
+        // even if the capture daemon's background pass didn't finish; the real model gets
+        // a proper background worker instead of embedding at search time.
+        let indexer = EmbeddingIndexer(provider: HashingEmbeddingProvider())
+        try catalog.indexEmbeddings(indexer)
+        let queryVector = indexer.queryVector(for: trimmed)
+
+        let results = try catalog.search(MemoryQuery(text: trimmed, limit: 8), queryVector: queryVector)
         guard !results.isEmpty else {
             print("No matching memories yet. Capture some first: run `scrollbackd` for a while, then search.")
             return 0

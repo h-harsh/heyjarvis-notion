@@ -47,19 +47,23 @@ public final class ShardedCatalog {
     /// `[SearchResult]` (metadata included); those per-shard orderings are re-fused
     /// via RRF + diversified, so a single-shard query is identical to querying that
     /// shard directly.
-    public func search(_ query: MemoryQuery, ranker: HybridRanker = HybridRanker()) throws -> [SearchResult] {
+    public func search(
+        _ query: MemoryQuery,
+        ranker: HybridRanker = HybridRanker(),
+        queryVector: QuantizedEmbedding? = nil
+    ) throws -> [SearchResult] {
         let shards = calendar.shards(intersecting: query.timeRange, among: try existingShards())
         guard !shards.isEmpty else { return [] }
 
         if shards.count == 1 {
-            return try store(for: shards[0]).hybridSearch(query, ranker: ranker)
+            return try store(for: shards[0]).hybridSearch(query, ranker: ranker, queryVector: queryVector)
         }
 
         var resultByID: [String: SearchResult] = [:]
         var rankedLists: [[String]] = []
         var episodeOf: [String: String] = [:]
         for shard in shards {
-            let hits = try store(for: shard).hybridSearch(query, ranker: ranker)
+            let hits = try store(for: shard).hybridSearch(query, ranker: ranker, queryVector: queryVector)
             rankedLists.append(hits.map { $0.chunkID.uuidString })
             for hit in hits {
                 resultByID[hit.chunkID.uuidString] = hit
@@ -74,6 +78,21 @@ public final class ShardedCatalog {
             return SearchResult(chunkID: hit.chunkID, episodeID: hit.episodeID, text: hit.text,
                                 score: entry.score, source: hit.source, provenance: hit.provenance, ts: hit.ts)
         }
+    }
+
+    // MARK: - Embedding (lazy, cross-shard)
+
+    /// Embed not-yet-embedded chunks across every shard (the background/backlog pass).
+    /// Returns the total number embedded. Confined to this catalog's single actor/queue
+    /// like every other method — capture and indexing must not touch the store from two
+    /// threads.
+    @discardableResult
+    public func indexEmbeddings(_ indexer: EmbeddingIndexer, batchSize: Int = 64) throws -> Int {
+        var total = 0
+        for shard in try existingShards() {
+            total += try indexer.indexAll(in: store(for: shard), batchSize: batchSize)
+        }
+        return total
     }
 
     // MARK: - Purge (whole-file delete — the provable erase)

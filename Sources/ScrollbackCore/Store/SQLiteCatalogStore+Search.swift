@@ -20,6 +20,7 @@ extension SQLiteCatalogStore {
     public func hybridSearch(
         _ query: MemoryQuery,
         ranker: HybridRanker = HybridRanker(),
+        queryVector: QuantizedEmbedding? = nil,
         candidatePool: Int? = nil
     ) throws -> [SearchResult] {
         // Clamp the caller-supplied limit at the retrieval boundary (no upstream
@@ -33,13 +34,19 @@ extension SQLiteCatalogStore {
 
         let ftsIDs = try ftsCandidates(query.text, filters: filters, limit: pool)
         let recencyIDs = try recencyCandidates(filters: filters, limit: pool)
+        // Vector KNN slots in as a third RRF list (tech-spec ranking) when the caller
+        // supplies an embedded query; the fusion + diversification policy is unchanged.
+        let vectorIDs = try queryVector.map {
+            try vectorCandidates(queryVector: $0, filters: filters, limit: pool)
+        } ?? []
 
         // Map every candidate to its episode for diversification.
         var episodeOf: [String: String] = [:]
         for (chunkID, episodeID) in ftsIDs { episodeOf[chunkID] = episodeID }
         for (chunkID, episodeID) in recencyIDs { episodeOf[chunkID] = episodeID }
+        for (chunkID, episodeID) in vectorIDs { episodeOf[chunkID] = episodeID }
 
-        let rankedLists = [ftsIDs.map { $0.chunkID }, recencyIDs.map { $0.chunkID }]
+        let rankedLists = [ftsIDs.map { $0.chunkID }, recencyIDs.map { $0.chunkID }, vectorIDs.map { $0.chunkID }]
             .filter { !$0.isEmpty }
         guard !rankedLists.isEmpty else { return [] }
 
@@ -95,6 +102,44 @@ extension SQLiteCatalogStore {
         var out: [(String, String)] = []
         while try statement.step() { out.append((statement.text(0), statement.text(1))) }
         return out
+    }
+
+    /// Vector-KNN candidates: brute-force cosine of `queryVector` against every stored
+    /// vector for its model that ALSO passes the hard pre-filters (time/app/entity are
+    /// applied in SQL first, so a semantic hit outside the requested window can't leak
+    /// in). Returns the top `limit` chunk ids, similarity-descending, chunkId as a
+    /// deterministic tie-break. Only same-model vectors are compared (dimension match);
+    /// cross-model rows are excluded by the `model_id` predicate.
+    private func vectorCandidates(
+        queryVector: QuantizedEmbedding, filters: FilterClause, limit: Int
+    ) throws -> [(chunkID: String, episodeID: String)] {
+        var sql = """
+        SELECT v.chunk_id, c.episode_id, v.dim, v.scale, v.embedding
+        FROM chunk_vectors v
+        JOIN chunks c ON c.id = v.chunk_id
+        JOIN episodes e ON e.id = c.episode_id
+        WHERE v.model_id = ?
+        """
+        if !filters.sql.isEmpty { sql += " AND " + filters.sql }
+
+        let statement = try db.prepare(sql)
+        defer { statement.finalize() }
+        try statement.bindAll([.text(queryVector.modelID)] + filters.params)
+
+        var scored: [(chunkID: String, episodeID: String, score: Float)] = []
+        while try statement.step() {
+            let dim = Int(statement.int(2))
+            let bytes = statement.blob(4)
+            guard bytes.count == dim else { continue } // corrupt/legacy row — skip, don't crash
+            let stored = QuantizedEmbedding(
+                ints: Self.decodeInt8Vector(bytes),
+                scale: Float(statement.double(3)),
+                modelID: queryVector.modelID
+            )
+            scored.append((statement.text(0), statement.text(1), Int8Quantizer.similarity(queryVector, stored)))
+        }
+        scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.chunkID < $1.chunkID }
+        return scored.prefix(limit).map { ($0.chunkID, $0.episodeID) }
     }
 
     // MARK: - Result metadata (join events for provenance)
