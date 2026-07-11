@@ -280,7 +280,7 @@ final class CaptureEngineTests: XCTestCase {
 
     // MARK: Clipboard
 
-    func testClipboardEmitsVerbatimTextWithProvenance() {
+    func testClipboardEmitsNormalizedTextWithProvenance() {
         let provider = FixtureProvider()
         provider.textByContextKey[safari.key] = "page"
         let sink = RecordingSink()
@@ -291,7 +291,9 @@ final class CaptureEngineTests: XCTestCase {
 
         XCTAssertEqual(engine.stats.clipboardEvents, 1)
         let clip = sink.clipboardEvents.last
-        XCTAssertEqual(clip?.rawText, "copied  snippet\nwith breaks") // verbatim, not normalized
+        // Normalized (whitespace collapsed), not verbatim — so the single redaction
+        // pass sees the same canonical form the dedup hash does (no verbatim leak).
+        XCTAssertEqual(clip?.rawText, "copied snippet with breaks")
         XCTAssertEqual(clip?.provenance, .untrustedAmbient)
     }
 
@@ -393,5 +395,52 @@ final class CaptureEngineTests: XCTestCase {
         XCTAssertEqual(sink.closed.count, 1)
         XCTAssertEqual(sink.closed[0].tsEnd, at(10))
         XCTAssertEqual(engine.stats.episodesClosed, 1)
+    }
+
+    // MARK: Redaction at the emit chokepoint
+
+    func testCapturedSecretIsMaskedInEvent() {
+        // A secret on screen must never reach the sink unmasked — redaction is at
+        // the shared emit path, so screen capture is covered without special-casing.
+        let provider = FixtureProvider()
+        provider.textByContextKey[safari.key] = "deploy key sk-abcDEF0123456789ghXYZ ready"
+        let sink = RecordingSink()
+        let engine = makeEngine(provider: provider, sink: sink)
+
+        engine.handleAppOrWindowChange(safari, at: at(0))
+
+        XCTAssertEqual(sink.screenEvents.count, 1)
+        let event = sink.screenEvents[0]
+        XCTAssertFalse(event.rawText.contains("sk-abcDEF0123456789"))
+        XCTAssertTrue(event.rawText.contains("[redacted:apiKey]"))
+        XCTAssertTrue(event.redactionFlags.contains(.apiKey))
+    }
+
+    func testCopiedSecretIsMaskedInClipboardEvent() {
+        let provider = FixtureProvider()
+        let sink = RecordingSink()
+        let engine = makeEngine(provider: provider, sink: sink)
+
+        engine.handleClipboard("4111 1111 1111 1111", context: safari, at: at(0))
+
+        XCTAssertEqual(sink.clipboardEvents.count, 1)
+        let event = sink.clipboardEvents[0]
+        XCTAssertFalse(event.rawText.contains("4111"))
+        XCTAssertTrue(event.redactionFlags.contains(.creditCard))
+    }
+
+    func testTabSeparatedClipboardCardIsMaskedNotLeaked() {
+        // A card copied from a spreadsheet (tab separators): storing the
+        // normalized form means the single redaction pass catches it — rawText
+        // must not retain the PAN and the flag must be set (no verbatim leak).
+        let provider = FixtureProvider()
+        let sink = RecordingSink()
+        let engine = makeEngine(provider: provider, sink: sink)
+
+        engine.handleClipboard("4111\t1111\t1111\t1111", context: safari, at: at(0))
+
+        let event = sink.clipboardEvents[0]
+        XCTAssertFalse(event.rawText.contains("4111"))
+        XCTAssertTrue(event.redactionFlags.contains(.creditCard))
     }
 }

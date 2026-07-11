@@ -16,12 +16,13 @@ Observe: ends with `Build complete!` and exit code 0. Any compile error → fail
 
 ### 2. Tests
 Run: `swift test`
-Observe: final line `Executed N tests, with 0 failures` (N ≥ 51 today) and exit 0.
+Observe: final line `Executed N tests, with 0 failures` (N ≥ 74 today) and exit 0.
 This is where the load-bearing invariants are asserted with exact values:
 - `RankFusion` fuses to exact RRF scores and a deterministic tie-break order.
 - `CaptureEvent.provenance` defaults to `.untrustedAmbient` (the security invariant).
 - `AXCapturePolicy.isSecureField` treats subrole `AXSecureTextField` as secure — the never-read-passwords guard (a broken guard fails here, not in production).
 - `CaptureEngine`: episodes open/close on context change and idle, resume-after-idle reopen, app-driven content changes do NOT defeat idle, typing debounce (rolling + cleared-on-window-switch), per-episode hash dedup, clipboard verbatim capture, idle suppression (`idleProviderCalls == 0`), tsEnd never regresses, activity-gated fallback (never fixed-interval).
+- **Redact stage:** `Redactor` masks high-risk secrets (PEM keys, `sk-`/`gh_`/`AKIA`/`AIza`/`xox-`/JWT tokens, Luhn-valid cards) with `[redacted:<name>]` and sets `redaction_flags`, while surrounding text and PII (emails/phones/names) survive; Luhn gates card masking (valid masked, invalid kept) incl. length boundaries (13/19) and adjacency (`card + stray digit` still masked); redaction runs at the `CaptureEngine.emit` chokepoint (one pass drives rawText+hash+flags; clipboard stored normalized) so a captured/copied secret never reaches the sink unmasked, incl. tab/NBSP-separated cards; and the private-key rule is ReDoS-guarded (a `-----BEGIN`-flood with no `-----END` completes in <1s, not O(n²)).
 - **OCR fallback matrix:** `AppCaptureCapabilities` strategy resolution; `OCRFallbackPolicy` fires OCR only on empty/thin AX (threshold boundary); `LayeredTextSnapshotProvider` — `ocrOnly` skips the AX walk, `axOnly` never screenshots, `axThenOCR` rescues a title-only window but never regresses below AX (prefer-longer, ties keep AX), and **refuses OCR when AX saw a secure field** (`containedSecureField` — the never-screenshot-a-password-window guard); OCR output labelled `.ocr`; `OCRTextAssembler` reading-order is a strict weak ordering — deterministic/permutation-independent on chained-within-epsilon staircases (the intransitive-comparator regression).
 Adding capture/store/filing code MUST add tests here — a green build alone never counts.
 

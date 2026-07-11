@@ -20,6 +20,7 @@ public final class CaptureEngine {
     private let provider: TextSnapshotProvider
     private let sink: CaptureEventSink
     private let config: CaptureConfig
+    private let redactor: Redactor
 
     public private(set) var stats = CaptureStats()
 
@@ -37,10 +38,16 @@ public final class CaptureEngine {
     /// while re-reads within one episode are collapsed.
     private var lastHashByContext: [String: String] = [:]
 
-    public init(provider: TextSnapshotProvider, sink: CaptureEventSink, config: CaptureConfig = CaptureConfig()) {
+    public init(
+        provider: TextSnapshotProvider,
+        sink: CaptureEventSink,
+        config: CaptureConfig = CaptureConfig(),
+        redactor: Redactor = Redactor()
+    ) {
         self.provider = provider
         self.sink = sink
         self.config = config
+        self.redactor = redactor
     }
 
     // MARK: - Triggers
@@ -83,12 +90,13 @@ public final class CaptureEngine {
     public func handleClipboard(_ content: String, context: FrontmostContext, at now: Date) {
         noteActivity(at: now)
         ensureEpisode(context, at: now)
-        let capped = String(content.prefix(config.maxTextLength))
-        // Store the copied text verbatim (formatting can matter for a later
-        // paste); dedup on its normalized form.
+        // Store the NORMALIZED copy (whitespace collapsed): it feeds the same
+        // single redaction pass as screen text, so a card/secret copied with tab,
+        // newline, or NBSP separators can't slip past the space/dash-only patterns
+        // by staying in a verbatim form the hash pass would have masked.
+        let normalized = TextNormalizer.normalize(String(content.prefix(config.maxTextLength)))
         emit(
-            storeText: capped,
-            hashText: TextNormalizer.normalize(capped),
+            storeText: normalized,
             type: .clipboard,
             source: .ax,
             confidence: 1.0,
@@ -186,11 +194,9 @@ public final class CaptureEngine {
         if isIdle { stats.idleProviderCalls += 1 } // invariant: never happens
 
         guard let snapshot = provider.snapshot(for: context) else { return }
-        let capped = String(snapshot.text.prefix(config.maxTextLength))
-        let normalized = TextNormalizer.normalize(capped)
+        let normalized = TextNormalizer.normalize(String(snapshot.text.prefix(config.maxTextLength)))
         emit(
             storeText: normalized,
-            hashText: normalized,
             type: .screenText,
             source: snapshot.source,
             confidence: snapshot.confidence,
@@ -200,18 +206,24 @@ public final class CaptureEngine {
     }
 
     /// Single emit path shared by screen and clipboard capture: empty-guard →
-    /// hash → per-episode dedup → sink → stats → advance tsEnd.
+    /// redact → hash → per-episode dedup → sink → stats → advance tsEnd.
+    /// Redaction happens HERE, the one chokepoint every captured span passes
+    /// through, so no path (screen, clipboard, future audio) can store an
+    /// un-redacted secret. `storeText` is already whitespace-normalized by both
+    /// callers, so one redaction pass drives rawText, the dedup hash, AND the
+    /// flags — they can never disagree, and a secret never enters the hash.
     private func emit(
         storeText: String,
-        hashText: String,
         type: CaptureEventType,
         source: CaptureSource,
         confidence: Double,
         dedupKey: String,
         at now: Date
     ) {
-        guard let episode = currentEpisode, !hashText.isEmpty else { return }
-        let hash = TextNormalizer.hash(hashText)
+        guard let episode = currentEpisode, !storeText.isEmpty else { return }
+
+        let redaction = redactor.redact(storeText)
+        let hash = TextNormalizer.hash(redaction.text)
         if lastHashByContext[dedupKey] == hash {
             stats.dedupSkips += 1
             return
@@ -224,8 +236,9 @@ public final class CaptureEngine {
             type: type,
             source: source,
             confidence: confidence,
-            rawText: storeText,
-            textHash: hash
+            rawText: redaction.text,
+            textHash: hash,
+            redactionFlags: redaction.flags
         ))
         switch type {
         case .clipboard: stats.clipboardEvents += 1
