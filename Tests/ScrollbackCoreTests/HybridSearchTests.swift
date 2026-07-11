@@ -131,9 +131,12 @@ final class HybridSearchTests: XCTestCase {
     }
 
     func testFtsMatchQuerySanitization() {
-        XCTAssertEqual(SQLiteCatalogStore.ftsMatchQuery(from: "the Pricing-Doc!"), "\"the\" OR \"pricing\" OR \"doc\"")
+        // "the" is a dropped stopword; content words survive as an OR expression.
+        XCTAssertEqual(SQLiteCatalogStore.ftsMatchQuery(from: "the Pricing-Doc!"), "\"pricing\" OR \"doc\"")
         XCTAssertNil(SQLiteCatalogStore.ftsMatchQuery(from: "!!! a"))  // no token ≥ 2 chars
         XCTAssertNil(SQLiteCatalogStore.ftsMatchQuery(from: "   "))
+        XCTAssertNil(SQLiteCatalogStore.ftsMatchQuery(from: "what is it")) // all stopwords → recency carries
+        XCTAssertEqual(SQLiteCatalogStore.ftsMatchQuery(from: "what did I do today"), "\"today\"") // content word kept
     }
 
     func testEmptyStoreReturnsNoResults() throws {

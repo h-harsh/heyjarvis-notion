@@ -173,16 +173,19 @@ extension SQLiteCatalogStore {
     // MARK: - Query sanitization
 
     /// Turn free-text into a safe FTS5 MATCH expression: alphanumeric tokens (≥2
-    /// chars, deduped, capped), each a quoted string literal, ORed together. Raw
-    /// user text through MATCH would AND every term (near-zero recall on
-    /// natural-language queries) and could be a syntax error on punctuation. Returns
-    /// nil when no usable term remains (the recency list then carries the query).
+    /// chars, deduped, stop-worded, capped), each a quoted string literal, ORed
+    /// together. Raw user text through MATCH would AND every term (near-zero recall
+    /// on natural-language queries) and could be a syntax error on punctuation.
+    /// Returns nil when no usable term remains (the recency list then carries the
+    /// query). Stopwords are dropped because OR-ing a word like "the" matches nearly
+    /// every chunk, flooding the candidate pool with irrelevant rows that then win
+    /// on recency — a real precision loss the retrieval bench caught.
     static func ftsMatchQuery(from text: String) -> String? {
         var seen = Set<String>()
         var tokens: [String] = []
         for piece in text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
             let token = String(piece)
-            guard token.count >= 2, !seen.contains(token) else { continue }
+            guard token.count >= 2, !stopwords.contains(token), !seen.contains(token) else { continue }
             seen.insert(token)
             tokens.append(token)
             if tokens.count == 12 { break }
@@ -190,6 +193,17 @@ extension SQLiteCatalogStore {
         guard !tokens.isEmpty else { return nil }
         return tokens.map { "\"\($0)\"" }.joined(separator: " OR ")
     }
+
+    /// Ultra-common function words that carry no retrieval intent. Deliberately
+    /// small — content words (incl. "today", "meeting", app/entity names) are NEVER
+    /// dropped; only words that would match nearly everything.
+    static let stopwords: Set<String> = [
+        "the", "an", "and", "or", "of", "to", "in", "on", "at", "as", "by", "for",
+        "from", "with", "is", "am", "are", "was", "were", "be", "been", "being",
+        "it", "its", "this", "that", "these", "those", "here", "there",
+        "do", "does", "did", "done", "what", "when", "which", "who", "how", "why",
+        "we", "our", "you", "your", "my", "me", "if", "then", "so", "but",
+    ]
 
     private static func escapeLike(_ value: String) -> String {
         value.replacingOccurrences(of: "\\", with: "\\\\")
