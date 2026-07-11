@@ -260,7 +260,7 @@ func runDaemon() -> Never {
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
         ).appendingPathComponent("Scrollback/spike", isDirectory: true)
-        let sink = try JSONLSink(directory: supportDir)
+        let sink = InstrumentedSink(inner: try JSONLSink(directory: supportDir))
         let config = CaptureConfig()
         let axExtractor = AXTextExtractor(maxTotalChars: config.maxTextLength)
         // AX-first, OCR-fallback via the per-app capability matrix. OCR only
@@ -275,8 +275,12 @@ func runDaemon() -> Never {
         let runtime = CaptureRuntime(engine: engine, extractor: axExtractor, idleThreshold: config.idleThreshold)
         runtime.start()
 
-        // Flush the open episode on Ctrl-C / SIGTERM before exiting.
-        installShutdownHandler { runtime.shutdown() }
+        // Flush the open episode on Ctrl-C / SIGTERM before exiting, then log the
+        // session's capture volume (raw vs deduped chars, chunks/hour).
+        installShutdownHandler {
+            runtime.shutdown()
+            sink.logVolume()
+        }
 
         if !CGPreflightScreenCaptureAccess() {
             print("note: Screen Recording not granted — OCR fallback inactive (AX-only). "
