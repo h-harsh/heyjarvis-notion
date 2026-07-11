@@ -109,4 +109,51 @@ final class ChunkerTests: XCTestCase {
             XCTAssertGreaterThan(volume.storedChars, 0)
         }
     }
+
+    // MARK: ChunkingStage — near-dup collapse
+
+    private func longDoc(_ namespace: String, words: Int = 60) -> String {
+        (0..<words).map { "\(namespace)\($0)" }.joined(separator: " ")
+    }
+
+    func testNearDuplicateRereadIsCollapsedNotStored() {
+        // A scrolled re-read (same doc + a couple appended words) is NOT byte-equal,
+        // so exact-hash dedup misses it; MinHash collapse must catch it.
+        let stage = ChunkingStage(chunker: Chunker(targetTokens: 4000, maxTokens: 8000))
+        let base = longDoc("a")
+
+        let first = stage.ingest(event(base))
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(stage.stats.chunksStored, 1)
+
+        let second = stage.ingest(event(base + " a60 a61")) // scrolled re-read
+        XCTAssertTrue(second.isEmpty)
+        XCTAssertEqual(stage.stats.chunksStored, 1)   // not re-stored
+        XCTAssertEqual(stage.stats.nearDupSkips, 1)
+        XCTAssertEqual(stage.stats.dedupSkips, 0)     // it wasn't an EXACT match
+    }
+
+    func testDisablingNearDupKeepsNearDuplicates() {
+        // With near-dup off, only exact-hash dedup applies — the scrolled re-read
+        // is a distinct chunk and IS stored.
+        let stage = ChunkingStage(
+            chunker: Chunker(targetTokens: 4000, maxTokens: 8000),
+            nearDup: nil
+        )
+        let base = longDoc("a")
+        stage.ingest(event(base))
+        stage.ingest(event(base + " a60 a61"))
+        XCTAssertEqual(stage.stats.chunksStored, 2)
+        XCTAssertEqual(stage.stats.nearDupSkips, 0)
+    }
+
+    func testDistinctDocsSurviveNearDup() {
+        // Default (near-dup on): genuinely different documents are all retained.
+        let stage = ChunkingStage(chunker: Chunker(targetTokens: 4000, maxTokens: 8000))
+        stage.ingest(event(longDoc("a")))
+        stage.ingest(event(longDoc("b")))
+        stage.ingest(event(longDoc("c")))
+        XCTAssertEqual(stage.stats.chunksStored, 3)
+        XCTAssertEqual(stage.stats.nearDupSkips, 0)
+    }
 }

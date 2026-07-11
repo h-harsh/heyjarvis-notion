@@ -133,28 +133,36 @@ public struct HourlyVolume: Sendable, Equatable {
 /// instrumentation logs and the sqlite-vec ~1M re-eval trigger reads.
 public struct ChunkVolumeStats: Sendable, Equatable {
     public var rawChars = 0        // chars across all chunks produced (pre-dedup)
-    public var storedChars = 0     // chars kept after exact-hash dedup
+    public var storedChars = 0     // chars kept after dedup + near-dup collapse
     public var chunksProduced = 0
     public var chunksStored = 0    // == the vector count once embedded
-    public var dedupSkips = 0
+    public var dedupSkips = 0      // dropped by exact normalized-hash match
+    public var nearDupSkips = 0    // dropped by MinHash near-dup collapse (~0.85 Jaccard)
     public init() {}
 }
 
-/// The chunk pipeline stage: chunk each event, drop chunks whose normalized text
-/// was already seen (exact-hash dedup — "identical re-read text stored once"), and
+/// The chunk pipeline stage: chunk each event, then drop chunks that are either an
+/// exact re-read (normalized-hash match — "identical text stored once") or a NEAR
+/// duplicate of already-retained text (MinHash/LSH collapse — a scrolled or lightly
+/// edited re-read that isn't byte-equal but would waste the embedding budget), and
 /// maintain volume counters (total + per hour). Not thread-safe by contract; the
 /// daemon drives it on the main run loop like the rest of capture.
 ///
-/// The seen-hash set is in-memory for the spike; once the encrypted store lands it
-/// becomes a DB existence check against a chunk-hash index (bounded memory).
+/// The seen-hash set + MinHash index are in-memory for the spike; once the encrypted
+/// store lands, exact dedup becomes a DB existence check against a chunk-hash index
+/// (bounded memory).
 public final class ChunkingStage {
     private let chunker: Chunker
+    private let nearDup: NearDupCollapser?
     private var seenHashes: Set<String> = []
     public private(set) var stats = ChunkVolumeStats()
     public private(set) var hourly: [Int64: HourlyVolume] = [:]
 
-    public init(chunker: Chunker = Chunker()) {
+    /// - Parameter nearDup: MinHash near-dup collapser (default on). Pass `nil` to
+    ///   run exact-hash dedup only.
+    public init(chunker: Chunker = Chunker(), nearDup: NearDupCollapser? = NearDupCollapser()) {
         self.chunker = chunker
+        self.nearDup = nearDup
     }
 
     /// Chunks `event` and returns the NEW (non-duplicate) chunks to persist.
@@ -173,6 +181,13 @@ public final class ChunkingStage {
                 stats.dedupSkips += 1
                 continue
             }
+            // Near-dup collapse runs only after the cheap exact-hash miss. A
+            // collapsed chunk is intentionally NOT added to `seenHashes` — a later
+            // exact re-read of it still resolves via the MinHash index.
+            if let nearDup, case .duplicate = nearDup.add(chunk.text) {
+                stats.nearDupSkips += 1
+                continue
+            }
             seenHashes.insert(hash)
             stats.storedChars += chunk.text.count
             stats.chunksStored += 1
@@ -189,7 +204,8 @@ public final class ChunkingStage {
     }
 
     public var summary: String {
-        "chunks_stored=\(stats.chunksStored) chunks_dropped=\(stats.dedupSkips) "
+        "chunks_stored=\(stats.chunksStored) exact_dupes=\(stats.dedupSkips) "
+            + "near_dupes=\(stats.nearDupSkips) "
             + "raw_chars=\(stats.rawChars) stored_chars=\(stats.storedChars) "
             + "hours=\(hourly.count)"
     }
