@@ -144,6 +144,28 @@ final class HybridSearchTests: XCTestCase {
         XCTAssertTrue(try store.hybridSearch(MemoryQuery(text: "anything")).isEmpty)
     }
 
+    func testContentQueryWithNoMatchReturnsEmptyNotRecencyNoise() throws {
+        // A keyword query that matches NOTHING must return empty — NOT the most-recent
+        // captures as false matches (the real-data bug: "kubernetes deployment" surfaced
+        // an unrelated recent billing page via the recency list).
+        let store = try SQLiteCatalogStore.inMemory()
+        try seed(store, chunks: [("update your payment info card number security code", at(10))])
+        try seed(store, chunks: [("cookie policy consent preferences", at(20))])
+
+        let results = try store.hybridSearch(MemoryQuery(text: "kubernetes deployment rollout"))
+        XCTAssertTrue(results.isEmpty, "no content match → empty, not recent-but-irrelevant chunks")
+    }
+
+    func testTimeScopedBrowseStillCarriesViaRecency() throws {
+        // The legit browse must still work: an explicit time window returns recent
+        // chunks in it even when the query words don't match their text.
+        let store = try SQLiteCatalogStore.inMemory()
+        try seed(store, chunks: [("annual planning offsite agenda", at(10_000))])
+        let window = at(9_000)...at(11_000)
+        let results = try store.hybridSearch(MemoryQuery(text: "what did I do", timeRange: window))
+        XCTAssertEqual(results.first?.text, "annual planning offsite agenda")
+    }
+
     func testAbsurdLimitIsClampedNotCrashed() throws {
         // Review finding: an unclamped huge limit trapped on `limit * 5` overflow
         // and could blow past SQLite's bind-variable cap. It must clamp, not crash.

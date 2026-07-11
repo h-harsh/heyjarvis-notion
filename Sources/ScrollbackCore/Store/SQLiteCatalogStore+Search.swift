@@ -17,6 +17,15 @@ extension SQLiteCatalogStore {
     /// variable cap and the pool multiply overflow-safe.
     static let maxResultLimit = 200
 
+    /// Vector candidates below this cosine are NOT real semantic matches — brute-force
+    /// KNN always returns *some* nearest neighbor, so without a floor a no-match query
+    /// returns its least-dissimilar (irrelevant) chunks. Tuned for the lexical hashing
+    /// FALLBACK: large captured chunks (a full page of text) collide with a short query
+    /// in enough hash buckets to reach ~0.1–0.2 by chance, so the floor sits above that
+    /// — a genuine word-overlap match scores higher (~0.35+). The real EmbeddingGemma is
+    /// collision-free dense vectors and wants its OWN (lower) floor — retune on swap.
+    static let minVectorSimilarity: Float = 0.3
+
     public func hybridSearch(
         _ query: MemoryQuery,
         ranker: HybridRanker = HybridRanker(),
@@ -33,12 +42,21 @@ extension SQLiteCatalogStore {
         let filters = buildFilters(query)
 
         let ftsIDs = try ftsCandidates(query.text, filters: filters, limit: pool)
-        let recencyIDs = try recencyCandidates(filters: filters, limit: pool)
         // Vector KNN slots in as a third RRF list (tech-spec ranking) when the caller
         // supplies an embedded query; the fusion + diversification policy is unchanged.
+        // Thresholded so a query with no real semantic match doesn't return its
+        // least-dissimilar neighbors as if they were hits.
         let vectorIDs = try queryVector.map {
             try vectorCandidates(queryVector: $0, filters: filters, limit: pool)
         } ?? []
+
+        // Recency is a BROWSE list ("what did I do today"), not a content-match source:
+        // include it only for a pure browse (no usable query terms) or an explicitly
+        // time-scoped query. For a content query with real terms, keyword + vector must
+        // carry — otherwise the most-recent captures flood in as false matches (a real
+        // query for "kubernetes" surfacing an unrelated recent page).
+        let isBrowse = Self.ftsMatchQuery(from: query.text) == nil || query.timeRange != nil
+        let recencyIDs = isBrowse ? try recencyCandidates(filters: filters, limit: pool) : []
 
         // Map every candidate to its episode for diversification.
         var episodeOf: [String: String] = [:]
@@ -136,7 +154,9 @@ extension SQLiteCatalogStore {
                 scale: Float(statement.double(3)),
                 modelID: queryVector.modelID
             )
-            scored.append((statement.text(0), statement.text(1), Int8Quantizer.similarity(queryVector, stored)))
+            let score = Int8Quantizer.similarity(queryVector, stored)
+            guard score >= Self.minVectorSimilarity else { continue } // not a real match — drop
+            scored.append((statement.text(0), statement.text(1), score))
         }
         scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.chunkID < $1.chunkID }
         return scored.prefix(limit).map { ($0.chunkID, $0.episodeID) }
