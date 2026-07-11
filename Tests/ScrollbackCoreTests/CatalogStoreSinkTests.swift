@@ -88,6 +88,42 @@ final class CatalogStoreSinkTests: XCTestCase {
         XCTAssertFalse(try catalog.search(MemoryQuery(text: "checklist")).isEmpty)
     }
 
+    func testInterleavedAmbientEpisodeDoesNotCorruptFocused() throws {
+        // The all-windows sweep opens/closes a short ambient episode INSIDE the open
+        // focused episode. Both must persist as distinct, complete episodes.
+        let catalog = try makeCatalog()
+        let sink = CatalogStoreSink(catalog: catalog)
+
+        var focused = Episode(tsStart: at(0), tsEnd: at(0), bundleID: "com.apple.Safari",
+                              appName: "Safari", windowTitle: "Focused Docs")
+        sink.episodeOpened(focused)
+        sink.event(CaptureEvent(episodeID: focused.id, ts: at(0), type: .screenText, source: .ax,
+                                rawText: "focused window first read"))
+
+        // --- ambient episode fully opens/closes while `focused` is still open ---
+        var ambient = Episode(tsStart: at(1), tsEnd: at(1), bundleID: "com.google.Chrome",
+                              appName: "Chrome", windowTitle: "Background Ahrefs")
+        sink.episodeOpened(ambient)
+        sink.event(CaptureEvent(episodeID: ambient.id, ts: at(1), type: .screenText, source: .ocr,
+                                rawText: "background ahrefs dashboard numbers"))
+        ambient.tsEnd = at(1)
+        sink.episodeClosed(ambient)
+
+        // --- focused episode keeps going, then closes ---
+        sink.event(CaptureEvent(episodeID: focused.id, ts: at(2), type: .screenText, source: .ax,
+                                rawText: "focused window second read"))
+        focused.tsEnd = at(2)
+        sink.episodeClosed(focused)
+
+        XCTAssertEqual(sink.episodesStored, 2)
+        // Both windows' content is independently searchable (not merged/lost).
+        XCTAssertFalse(try catalog.search(MemoryQuery(text: "ahrefs")).isEmpty)
+        XCTAssertFalse(try catalog.search(MemoryQuery(text: "focused")).isEmpty)
+        // The focused episode kept BOTH its reads despite the ambient flush in between.
+        let focusedHits = try catalog.search(MemoryQuery(text: "second"))
+        XCTAssertEqual(focusedHits.first?.episodeID, focused.id)
+    }
+
     private final class SpySink: CaptureEventSink {
         var opened = 0, closed = 0, events = 0
         func episodeOpened(_ episode: Episode) { opened += 1 }

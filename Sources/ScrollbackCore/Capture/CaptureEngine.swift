@@ -22,12 +22,25 @@ public final class CaptureEngine {
     private let config: CaptureConfig
     private let redactor: Redactor
     private let exclusions: ExclusionSet
+    /// Reads background (non-focused) windows during an all-windows sweep. `nil`
+    /// (the default, and what `simulate`/most tests use) makes `sweepAmbientWindows`
+    /// a no-op — so the fixture never sweeps and the `simulate` golden is unchanged.
+    private let ambientProvider: AmbientWindowProvider?
 
     /// Stored in place of content for a `.redact`-mode exclusion: the episode
     /// (app/window/time) is recorded, the on-screen text is not.
     static let redactedContentPlaceholder = "[content excluded by redact rule]"
 
     public private(set) var stats = CaptureStats()
+    /// Counters for the all-windows sweep — kept out of `stats`/`CaptureStats.summary`
+    /// so the `simulate` golden line stays byte-identical.
+    public private(set) var ambientStats = AmbientSweepStats()
+
+    /// Cross-sweep dedup for ambient windows, keyed by `windowID`: re-sweeping an
+    /// unchanged background window (you switch focus a lot) must not re-store it.
+    /// Deliberately separate from `lastHashByContext` (the focused stream's
+    /// per-episode dedup) — the sweep never touches focused state.
+    private var lastAmbientHashByWindow: [UInt32: String] = [:]
 
     private(set) var currentEpisode: Episode?
     /// Last known frontmost context. Retained across idle-close so activity can
@@ -48,13 +61,15 @@ public final class CaptureEngine {
         sink: CaptureEventSink,
         config: CaptureConfig = CaptureConfig(),
         redactor: Redactor = Redactor(),
-        exclusions: ExclusionSet = ExclusionSet()
+        exclusions: ExclusionSet = ExclusionSet(),
+        ambientProvider: AmbientWindowProvider? = nil
     ) {
         self.provider = provider
         self.sink = sink
         self.config = config
         self.redactor = redactor
         self.exclusions = exclusions
+        self.ambientProvider = ambientProvider
     }
 
     // MARK: - Triggers
@@ -169,6 +184,96 @@ public final class CaptureEngine {
     public func finish(at now: Date) {
         pendingTyping = nil
         closeEpisode(at: now)
+    }
+
+    // MARK: - All-windows sweep
+
+    /// Capture a set of background (non-focused) windows, each as its own atomic
+    /// episode. Called by the runtime on a focus/app change (event-triggered, never
+    /// a poll) with the planner's selection. A no-op if no ambient provider is set.
+    ///
+    /// Deliberately isolated from the focused stream: it never reads or writes
+    /// `currentEpisode`/`currentContext`/idle/activity/`lastHashByContext`, so an
+    /// ambient sweep can't disturb the episode you're actively in (its debounce,
+    /// idle timer, dedup). Each window opens → captures once → closes immediately.
+    public func sweepAmbientWindows(_ targets: [AmbientWindowTarget], at now: Date) {
+        guard let ambientProvider else { return }
+        for target in targets {
+            captureAmbientWindow(target, using: ambientProvider, at: now)
+        }
+        // Bound the cross-sweep dedup map to this sweep's windows: evict windows no
+        // longer present so it can't grow unbounded over an always-on session. This
+        // runs at sweep END, so it also drops the hash of a window that has closed by
+        // now — which makes a recycled windowID far less likely to inherit a stale
+        // hash (a windowID reused in the very NEXT sweep is still matched against the
+        // prior hash during that sweep, so content-hash inequality is the final guard;
+        // macOS CGWindowIDs are monotonic, so this window is vanishingly small).
+        let live = Set(targets.map { $0.windowID })
+        lastAmbientHashByWindow = lastAmbientHashByWindow.filter { live.contains($0.key) }
+    }
+
+    private func captureAmbientWindow(
+        _ target: AmbientWindowTarget, using provider: AmbientWindowProvider, at now: Date
+    ) {
+        let context = target.context
+        let mode = exclusions.mode(for: context)
+        // Defense in depth — the planner already dropped never-capture windows, but
+        // the engine is the authoritative exclusion chokepoint (as on the focused path).
+        guard mode != .neverCapture else { return }
+
+        // Resolve the text to store. A redact rule records the episode but not the
+        // screen text — and, like the focused path, doesn't even read the window.
+        let storeText: String
+        let source: CaptureSource
+        let confidence: Double
+        if mode == .redact {
+            storeText = CaptureEngine.redactedContentPlaceholder
+            source = .ax
+            confidence = 1.0
+        } else {
+            ambientStats.providerCalls += 1
+            guard let snapshot = provider.snapshot(of: target) else { return }
+            storeText = TextNormalizer.normalize(String(snapshot.text.prefix(config.maxTextLength)))
+            source = snapshot.source
+            confidence = snapshot.confidence
+        }
+        guard !storeText.isEmpty else { return }
+
+        // Same redact chokepoint as `emit`: redact → hash → dedup. The dedup is
+        // per-WINDOW across sweeps (unchanged background window ⇒ skip).
+        let redaction = redactor.redact(storeText)
+        let hash = TextNormalizer.hash(redaction.text)
+        if lastAmbientHashByWindow[target.windowID] == hash {
+            ambientStats.dedupSkips += 1
+            return
+        }
+        lastAmbientHashByWindow[target.windowID] = hash
+
+        // Atomic episode: open → one event → close. `provenance` defaults to
+        // `.untrustedAmbient` (the security invariant), same as every capture.
+        let episode = Episode(
+            tsStart: now,
+            tsEnd: now,
+            bundleID: context.bundleID,
+            appName: context.appName,
+            windowTitle: (mode == .redact) ? CaptureEngine.redactedContentPlaceholder : context.windowTitle
+        )
+        sink.episodeOpened(episode)
+        sink.event(CaptureEvent(
+            episodeID: episode.id,
+            ts: now,
+            type: .screenText,
+            source: source,
+            confidence: confidence,
+            rawText: redaction.text,
+            textHash: hash,
+            redactionFlags: redaction.flags
+        ))
+        var closed = episode
+        closed.tsEnd = now
+        sink.episodeClosed(closed)
+        ambientStats.episodes += 1
+        ambientStats.events += 1
     }
 
     // MARK: - Internals

@@ -37,7 +37,7 @@ import ScrollbackCore
 /// screenshot can't be piled on by the next capture. If the M1 CPU/latency gate
 /// shows stalls, the fix is to move OCR off the engine's synchronous path (the
 /// seam itself would not change).
-final class VisionOCRExtractor: TextSnapshotProvider {
+final class VisionOCRExtractor: TextSnapshotProvider, AmbientOCRReader {
 
     private let recognitionLevel: VNRequestTextRecognitionLevel
     private let captureTimeout: TimeInterval
@@ -70,13 +70,25 @@ final class VisionOCRExtractor: TextSnapshotProvider {
     }
 
     func snapshot(for context: FrontmostContext) -> CapturedText? {
+        capture(pid: context.pid, title: context.windowTitle, windowID: nil)
+    }
+
+    /// OCR a specific BACKGROUND window (the all-windows sweep) by its exact
+    /// `CGWindowID` — so we screenshot precisely that window even when two windows
+    /// share a title or a window has none. Same on-device Vision path + privacy
+    /// invariants (image feeds Vision only, then deallocates).
+    func ocrWindow(_ target: AmbientWindowTarget) -> CapturedText? {
+        capture(pid: target.context.pid, title: target.context.windowTitle, windowID: target.windowID)
+    }
+
+    private func capture(pid: pid_t, title: String?, windowID: UInt32?) -> CapturedText? {
         // Runtime suppressors (secure input active, NSWindowSharingNone). A
         // sharing-none window is excluded from ScreenCaptureKit anyway, but check
         // up front so we never even take the screenshot.
-        guard !CaptureGuards.shouldSuppressCapture(pid: context.pid) else { return nil }
+        guard !CaptureGuards.shouldSuppressCapture(pid: pid) else { return nil }
         // Cheap gate: if Screen Recording isn't granted, don't attempt anything.
         guard CGPreflightScreenCaptureAccess() else { return nil }
-        guard let image = captureWindowImage(pid: context.pid, title: context.windowTitle) else { return nil }
+        guard let image = captureWindowImage(pid: pid, title: title, windowID: windowID) else { return nil }
         let observations = recognizeText(in: image)
         // `image` is now unreferenced and deallocates here — never persisted.
         let text = OCRTextAssembler.assemble(observations)
@@ -85,7 +97,7 @@ final class VisionOCRExtractor: TextSnapshotProvider {
 
     // MARK: - Screenshot (async → sync bridge)
 
-    private func captureWindowImage(pid: pid_t, title: String?) -> CGImage? {
+    private func captureWindowImage(pid: pid_t, title: String?, windowID: UInt32?) -> CGImage? {
         // Serialize: skip (degrade to AX) if a prior capture is still running.
         let acquired = inFlight.withLock { busy -> Bool in
             if busy { return false }
@@ -107,7 +119,7 @@ final class VisionOCRExtractor: TextSnapshotProvider {
                 semaphore.signal()
             }
             if Task.isCancelled { return }
-            result = await Self.captureWindowImageAsync(pid: pid, title: title, scale: scale)
+            result = await Self.captureWindowImageAsync(pid: pid, title: title, windowID: windowID, scale: scale)
         }
 
         if semaphore.wait(timeout: .now() + captureTimeout) == .success {
@@ -117,12 +129,16 @@ final class VisionOCRExtractor: TextSnapshotProvider {
         return nil
     }
 
-    private static func captureWindowImageAsync(pid: pid_t, title: String?, scale: CGFloat) async -> CGImage? {
+    private static func captureWindowImageAsync(
+        pid: pid_t, title: String?, windowID: UInt32?, scale: CGFloat
+    ) async -> CGImage? {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true
             )
-            guard let window = bestWindow(for: pid, title: title, in: content.windows) else { return nil }
+            guard let window = bestWindow(for: pid, title: title, windowID: windowID, in: content.windows) else {
+                return nil
+            }
 
             let filter = SCContentFilter(desktopIndependentWindow: window)
             let config = SCStreamConfiguration()
@@ -137,11 +153,19 @@ final class VisionOCRExtractor: TextSnapshotProvider {
         }
     }
 
-    /// The window to OCR: the on-screen window of `pid` whose title matches the
-    /// AX-focused window (so the OCR'd pixels match what AX read and the episode
-    /// is attributed to), falling back to the largest on-screen window when no
-    /// title matches (some windows expose no title).
-    private static func bestWindow(for pid: pid_t, title: String?, in windows: [SCWindow]) -> SCWindow? {
+    /// The window to OCR. For a SWEEP target we have the exact `CGWindowID`: match it
+    /// precisely, or return NIL — NEVER fall back to another window of the same pid.
+    /// The pid-largest fallback could screenshot a DIFFERENT window than the one the
+    /// planner vetted — including one it deliberately excluded (an incognito/banking
+    /// window of the same browser) — when the target is stale/gone by capture time.
+    /// The title/largest fallbacks are only for the FOCUSED path (windowID == nil),
+    /// where the exact window is whatever AX just read.
+    private static func bestWindow(
+        for pid: pid_t, title: String?, windowID: UInt32?, in windows: [SCWindow]
+    ) -> SCWindow? {
+        if let windowID {
+            return windows.first { $0.windowID == windowID && $0.isOnScreen } // exact-or-nil; no fallback
+        }
         let owned = windows.filter { $0.owningApplication?.processID == pid && $0.isOnScreen }
         if let title, !title.isEmpty, let match = owned.first(where: { $0.title == title }) {
             return match

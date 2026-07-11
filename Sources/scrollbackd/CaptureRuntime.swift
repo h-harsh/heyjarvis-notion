@@ -67,6 +67,18 @@ final class CaptureRuntime: NSObject {
     private let extractor: AXTextExtractor
     private let idleThreshold: TimeInterval
 
+    /// All-windows sweep: the same exclusion set the engine uses (so the planner's
+    /// early drop and the engine's chokepoint agree), plus per-sweep bounds and a
+    /// minimum gap between sweeps. The sweep is event-triggered (a focus/app change),
+    /// throttled here so rapid switching can't run it faster than `minSweepInterval`.
+    private let exclusions: ExclusionSet
+    private let sweepConfig: VisibleWindowSweepConfig
+    private let minSweepInterval: TimeInterval
+    private var lastSweepAt: Date?
+    /// The sweep provider, held here so we can refill its per-sweep OCR budget before
+    /// each sweep. `nil` disables sweeping (e.g. a build without the provider wired).
+    private let ambientProvider: LayeredAmbientWindowProvider?
+
     private var currentContext: FrontmostContext?
     private var axObserver: AXObserver?
     private var observedPID: pid_t = -1
@@ -81,9 +93,21 @@ final class CaptureRuntime: NSObject {
     private let pasteboardProbeInterval: TimeInterval = 2
     private let titleRefreshDebounce: TimeInterval = 0.5
 
-    init(engine: CaptureEngine, extractor: AXTextExtractor, idleThreshold: TimeInterval = 300) {
+    init(
+        engine: CaptureEngine,
+        extractor: AXTextExtractor,
+        exclusions: ExclusionSet = ExclusionSet(),
+        ambientProvider: LayeredAmbientWindowProvider? = nil,
+        sweepConfig: VisibleWindowSweepConfig = VisibleWindowSweepConfig(),
+        minSweepInterval: TimeInterval = 5.0,
+        idleThreshold: TimeInterval = 300
+    ) {
         self.engine = engine
         self.extractor = extractor
+        self.exclusions = exclusions
+        self.ambientProvider = ambientProvider
+        self.sweepConfig = sweepConfig
+        self.minSweepInterval = minSweepInterval
         self.idleThreshold = idleThreshold
         super.init()
     }
@@ -104,7 +128,7 @@ final class CaptureRuntime: NSObject {
             timeInterval: heartbeatInterval, target: self,
             selector: #selector(heartbeat), userInfo: nil, repeats: true
         )
-        refreshFrontmost()
+        refreshFrontmost(isFocusChange: true) // initial sweep of the visible desktop
     }
 
     func shutdown() {
@@ -114,7 +138,7 @@ final class CaptureRuntime: NSObject {
     // MARK: - Sources
 
     @objc private func appActivated(_ note: Notification) {
-        refreshFrontmost()
+        refreshFrontmost(isFocusChange: true)
     }
 
     @objc private func pasteboardProbe() {
@@ -153,7 +177,7 @@ final class CaptureRuntime: NSObject {
     fileprivate func handleAXNotification(_ name: String) {
         switch name {
         case kAXFocusedWindowChangedNotification:
-            refreshFrontmost() // real window switch — act immediately
+            refreshFrontmost(isFocusChange: true) // real window switch — act immediately + sweep
         case kAXTitleChangedNotification:
             scheduleTitleRefresh() // coalesce title ticks (unread counts, clocks, progress)
         case kAXValueChangedNotification, kAXFocusedUIElementChangedNotification:
@@ -167,7 +191,7 @@ final class CaptureRuntime: NSObject {
 
     @objc private func titleRefreshFired() {
         titleRefreshTimer = nil
-        refreshFrontmost()
+        refreshFrontmost(isFocusChange: false) // same-window title tick — refresh, don't sweep
     }
 
     /// Collapse a burst of title changes into a single refresh after a quiet
@@ -183,13 +207,37 @@ final class CaptureRuntime: NSObject {
 
     // MARK: - Wiring
 
-    private func refreshFrontmost() {
+    /// `isFocusChange` = a genuine app/window focus change (worth an all-windows
+    /// sweep). A same-window title tick (a clock, unread count, progress) refreshes
+    /// the episode/title but must NOT sweep — otherwise a title-ticking app would
+    /// turn the event-triggered sweep into a periodic heavy loop.
+    private func refreshFrontmost(isFocusChange: Bool) {
         titleRefreshTimer?.invalidate()
         titleRefreshTimer = nil
+        let now = Date()
         guard let context = makeFrontmostContext(extractor: extractor) else { return }
         currentContext = context
-        engine.handleAppOrWindowChange(context, at: Date())
+        engine.handleAppOrWindowChange(context, at: now)
         attachAXObserver(to: context.pid)
+        if isFocusChange {
+            maybeSweepVisibleWindows(focused: context, at: now)
+        }
+    }
+
+    /// The all-windows sweep, triggered by a focus/app change (NOT a timer). Enumerate
+    /// every on-screen window across displays, let the planner pick which to capture
+    /// (drops the focused window, excluded windows, offscreen/tiny/wrong-layer), and
+    /// hand them to the engine — each becomes its own ambient episode. Throttled so
+    /// rapid switching runs it at most once per `minSweepInterval`.
+    private func maybeSweepVisibleWindows(focused: FrontmostContext, at now: Date) {
+        if let last = lastSweepAt, now.timeIntervalSince(last) < minSweepInterval { return }
+        lastSweepAt = now
+        let descriptors = VisibleWindowEnumerator.enumerate()
+        let targets = VisibleWindowSweepPlanner.plan(
+            windows: descriptors, focused: focused, exclusions: exclusions, config: sweepConfig
+        )
+        ambientProvider?.beginSweep() // refill the per-sweep OCR budget
+        engine.sweepAmbientWindows(targets, at: now)
     }
 
     private func attachAXObserver(to pid: pid_t) {
@@ -265,31 +313,44 @@ func runDaemon() -> Never {
         let catalog = try ShardedCatalog(directory: try scrollbackStoreDirectory())
         let sink = CatalogStoreSink(catalog: catalog, inner: try JSONLSink(directory: supportDir))
         let config = CaptureConfig()
+        let exclusions = ExclusionSet()
+        let capabilities = AppCaptureCapabilities()
         let axExtractor = AXTextExtractor(maxTotalChars: config.maxTextLength)
+        // One OCR extractor shared by the focused path and the sweep, so their
+        // screenshots serialize (`inFlight`) — at most one capture at a time, honoring
+        // the <5% CPU intent.
+        let ocrExtractor = VisionOCRExtractor()
         // AX-first, OCR-fallback via the per-app capability matrix. OCR only
         // fires for AX-opaque surfaces (and only if Screen Recording is granted);
         // rich-AX apps never pay for a screenshot. See LayeredTextSnapshotProvider.
-        let provider = LayeredTextSnapshotProvider(
-            ax: axExtractor,
-            ocr: VisionOCRExtractor(),
-            capabilities: AppCaptureCapabilities()
+        let provider = LayeredTextSnapshotProvider(ax: axExtractor, ocr: ocrExtractor, capabilities: capabilities)
+        // All-windows sweep: read each background window by exact identity (AX by
+        // title, OCR by windowID) with the same secure-field rules as the focused path
+        // plus a per-sweep OCR budget. Security logic lives in Core (tested headless).
+        let ambientProvider = LayeredAmbientWindowProvider(ax: axExtractor, ocr: ocrExtractor, capabilities: capabilities)
+        let engine = CaptureEngine(
+            provider: provider, sink: sink, config: config,
+            exclusions: exclusions, ambientProvider: ambientProvider
         )
-        let engine = CaptureEngine(provider: provider, sink: sink, config: config)
-        let runtime = CaptureRuntime(engine: engine, extractor: axExtractor, idleThreshold: config.idleThreshold)
+        let runtime = CaptureRuntime(
+            engine: engine, extractor: axExtractor, exclusions: exclusions,
+            ambientProvider: ambientProvider, idleThreshold: config.idleThreshold
+        )
         runtime.start()
 
         // Flush the open episode on Ctrl-C / SIGTERM before exiting, then log the
-        // session's capture volume (raw vs deduped chars, chunks/hour).
+        // session's capture volume (raw vs deduped chars, chunks/hour) + sweep counters.
         installShutdownHandler {
             runtime.shutdown()
             print("volume: \(sink.summary)")
+            print("sweep: \(engine.ambientStats.summary)")
         }
 
         if !CGPreflightScreenCaptureAccess() {
             print("note: Screen Recording not granted — OCR fallback inactive (AX-only). "
                 + "Grant it to capture AX-opaque apps; run `scrollbackd ocr-dump` to test.")
         }
-        print("capturing (event-driven) → searchable store + JSONL spike")
+        print("capturing (event-driven, all visible windows across displays) → searchable store + JSONL spike")
         print("Ctrl-C to stop. Then try:  scrollbackd search \"something you saw\"")
         print("(plaintext for now — encryption + the embedding model land next.)")
         withExtendedLifetime((runtime, engine)) {

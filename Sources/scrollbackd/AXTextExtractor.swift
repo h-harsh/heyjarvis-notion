@@ -10,7 +10,7 @@ import ScrollbackCore
 /// password content is never read. The decision lives in
 /// `AXCapturePolicy.isSecureField` (pure, unit-tested) because a password field
 /// reports "AXSecureTextField" as its *subrole* (role stays "AXTextField").
-final class AXTextExtractor: TextSnapshotProvider {
+final class AXTextExtractor: TextSnapshotProvider, AmbientAXReader {
 
     private let maxNodes: Int
     private let maxDepth: Int
@@ -53,6 +53,54 @@ final class AXTextExtractor: TextSnapshotProvider {
         // Strip loading-spinner/progress glyphs so an animated title doesn't churn
         // episode boundaries (the episode key includes the window title).
         return WindowTitleNormalizer.normalize(stringAttribute(window, kAXTitleAttribute))
+    }
+
+    /// Reads a specific BACKGROUND window (for the all-windows sweep) — the app
+    /// window whose normalized AX title matches `context.windowTitle`, not the
+    /// focused window. Same subtree walk as `snapshot`, so the never-read-secure-
+    /// fields guard and the `containedSecureField` signal carry through unchanged.
+    ///
+    /// Returns a RESOLUTION-AWARE result, not a bare `CapturedText?`, because the
+    /// caller MUST distinguish "walked this window, it's AX-opaque (empty) but has no
+    /// secure field → safe to OCR" from "couldn't resolve this window at all → NOT
+    /// vetted, must NOT OCR". Conflating the two (a nil `CapturedText`) is what let an
+    /// untitled/ title-mismatched secure-field window get screenshotted.
+    func readWindow(_ context: AmbientWindowTarget) -> AmbientAXReading {
+        let pid = context.context.pid
+        guard !CaptureGuards.shouldSuppressCapture(pid: pid) else { return .unresolved }
+        guard let window = windowMatchingTitle(pid: pid, title: context.context.windowTitle) else {
+            return .unresolved
+        }
+        var parts: [String] = []
+        var nodesVisited = 0
+        var charsCollected = 0
+        var sawSecureField = false
+        walk(window, depth: 0, parts: &parts, nodes: &nodesVisited, chars: &charsCollected, sawSecure: &sawSecureField)
+        let joined = parts.joined(separator: "\n")
+        let text = joined.isEmpty
+            ? nil
+            : CapturedText(text: joined, source: .ax, confidence: 1.0, containedSecureField: sawSecureField)
+        return AmbientAXReading(windowResolved: true, containedSecureField: sawSecureField, text: text)
+    }
+
+    /// The app's on-screen window whose normalized title equals `title` — but ONLY if
+    /// it's UNIQUE. Titles are normalized on both sides (the planner normalized the
+    /// descriptor title; we normalize the live AX title) so a spinner glyph can't
+    /// defeat the match. If two same-pid windows share the title we return nil (→
+    /// `.unresolved` → never OCR'd): the secure-field vetting here resolves by title
+    /// but the OCR screenshots by exact windowID, so an ambiguous title could vet a
+    /// DIFFERENT physical window than the one captured. Refusing the ambiguous case
+    /// keeps vetting and screenshot pinned to the same window (safe over coverage).
+    private func windowMatchingTitle(pid: pid_t, title: String?) -> AXUIElement? {
+        guard let title, !title.isEmpty else { return nil } // can't disambiguate untitled windows
+        let app = AXUIElementCreateApplication(pid)
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref) == .success,
+              let windows = ref as? [AXUIElement] else {
+            return nil
+        }
+        let matches = windows.filter { WindowTitleNormalizer.normalize(stringAttribute($0, kAXTitleAttribute)) == title }
+        return matches.count == 1 ? matches.first : nil // unique match only
     }
 
     // MARK: - AX plumbing
