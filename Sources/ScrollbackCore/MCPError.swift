@@ -4,15 +4,17 @@ import Foundation
 /// result (tech-spec §3a). The MCP proxy maps these to MCP protocol errors; the app
 /// UI reacts (e.g. prompts for biometric re-unlock on `.locked`).
 public enum MCPError: String, Error, Sendable, Equatable, Codable {
-    case locked = "LOCKED"             // biometric session expired — needs re-unlock
-    case rateLimited = "RATE_LIMITED"  // anti-hammering throttle tripped
-    case emptyRange = "EMPTY_RANGE"    // the query's time range is empty/inverted
+    case locked = "LOCKED"                    // biometric session expired — needs re-unlock
+    case rateLimited = "RATE_LIMITED"         // anti-hammering throttle tripped
+    case emptyRange = "EMPTY_RANGE"           // the query's time range is empty/inverted
+    case invalidArguments = "INVALID_ARGUMENTS" // missing/malformed tool args or unknown tool
 
     public var message: String {
         switch self {
         case .locked: return "Memory is locked — a biometric re-unlock is required."
         case .rateLimited: return "Too many memory queries — retry shortly."
         case .emptyRange: return "The requested time range is empty."
+        case .invalidArguments: return "The tool call was missing required arguments or was not recognized."
         }
     }
 }
