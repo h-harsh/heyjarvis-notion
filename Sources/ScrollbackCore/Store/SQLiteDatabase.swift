@@ -171,6 +171,9 @@ public final class Statement {
     public func textOrNil(_ column: Int32) -> String? {
         sqlite3_column_type(stmt, column) == SQLITE_NULL ? nil : text(column)
     }
+    public func intOrNil(_ column: Int32) -> Int64? {
+        sqlite3_column_type(stmt, column) == SQLITE_NULL ? nil : int(column)
+    }
     public func blob(_ column: Int32) -> [UInt8] {
         guard let pointer = sqlite3_column_blob(stmt, column) else { return [] }
         let count = Int(sqlite3_column_bytes(stmt, column))
