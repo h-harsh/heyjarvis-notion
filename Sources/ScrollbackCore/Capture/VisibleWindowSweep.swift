@@ -102,6 +102,7 @@ public enum VisibleWindowSweepPlanner {
         windows: [WindowDescriptor],
         focused: FrontmostContext?,
         exclusions: ExclusionSet,
+        capabilities: AppCaptureCapabilities = AppCaptureCapabilities(),
         config: VisibleWindowSweepConfig = VisibleWindowSweepConfig()
     ) -> [AmbientWindowTarget] {
         // A focused window with a known title is captured by the focused stream —
@@ -126,6 +127,18 @@ public enum VisibleWindowSweepPlanner {
                   !sharingNonePids.contains(window.pid) else { continue }
 
             let normalizedTitle = WindowTitleNormalizer.normalize(window.title)
+
+            // An untitled window can't be resolved by title, so for a non-ocrOnly app
+            // it can NEVER actually be captured (AXTextExtractor.readWindow returns
+            // .unresolved, and the provider then refuses to OCR an unvetted window).
+            // Multi-process apps (Chrome/Notion/Electron) register several title-less
+            // sub-window entries per visible window — dropping them declutters the plan
+            // and stops them consuming the per-sweep cap. ocrOnly apps CAN capture an
+            // untitled window (OCR targets by exact windowID), so those are kept.
+            if normalizedTitle == nil, capabilities.strategy(for: window.bundleID) != .ocrOnly {
+                continue
+            }
+
             if skipFocused, let focused,
                window.pid == focused.pid, normalizedTitle == focusedTitle {
                 continue // the focused window — already captured by the focused stream

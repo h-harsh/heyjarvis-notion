@@ -66,7 +66,8 @@ func runWindowsDump() -> Int32 {
     let descriptors = VisibleWindowEnumerator.enumerate()
     let focused = makeFrontmostContext(extractor: AXTextExtractor())
     let targets = VisibleWindowSweepPlanner.plan(
-        windows: descriptors, focused: focused, exclusions: ExclusionSet()
+        windows: descriptors, focused: focused,
+        exclusions: ExclusionSet(), capabilities: AppCaptureCapabilities()
     )
 
     if !CGPreflightScreenCaptureAccess() {

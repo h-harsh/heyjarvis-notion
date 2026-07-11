@@ -72,6 +72,7 @@ final class CaptureRuntime: NSObject {
     /// minimum gap between sweeps. The sweep is event-triggered (a focus/app change),
     /// throttled here so rapid switching can't run it faster than `minSweepInterval`.
     private let exclusions: ExclusionSet
+    private let capabilities: AppCaptureCapabilities
     private let sweepConfig: VisibleWindowSweepConfig
     private let minSweepInterval: TimeInterval
     private var lastSweepAt: Date?
@@ -97,6 +98,7 @@ final class CaptureRuntime: NSObject {
         engine: CaptureEngine,
         extractor: AXTextExtractor,
         exclusions: ExclusionSet = ExclusionSet(),
+        capabilities: AppCaptureCapabilities = AppCaptureCapabilities(),
         ambientProvider: LayeredAmbientWindowProvider? = nil,
         sweepConfig: VisibleWindowSweepConfig = VisibleWindowSweepConfig(),
         minSweepInterval: TimeInterval = 5.0,
@@ -105,6 +107,7 @@ final class CaptureRuntime: NSObject {
         self.engine = engine
         self.extractor = extractor
         self.exclusions = exclusions
+        self.capabilities = capabilities
         self.ambientProvider = ambientProvider
         self.sweepConfig = sweepConfig
         self.minSweepInterval = minSweepInterval
@@ -234,7 +237,8 @@ final class CaptureRuntime: NSObject {
         lastSweepAt = now
         let descriptors = VisibleWindowEnumerator.enumerate()
         let targets = VisibleWindowSweepPlanner.plan(
-            windows: descriptors, focused: focused, exclusions: exclusions, config: sweepConfig
+            windows: descriptors, focused: focused, exclusions: exclusions,
+            capabilities: capabilities, config: sweepConfig
         )
         ambientProvider?.beginSweep() // refill the per-sweep OCR budget
         engine.sweepAmbientWindows(targets, at: now)
@@ -334,7 +338,7 @@ func runDaemon() -> Never {
         )
         let runtime = CaptureRuntime(
             engine: engine, extractor: axExtractor, exclusions: exclusions,
-            ambientProvider: ambientProvider, idleThreshold: config.idleThreshold
+            capabilities: capabilities, ambientProvider: ambientProvider, idleThreshold: config.idleThreshold
         )
         runtime.start()
 

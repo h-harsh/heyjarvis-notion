@@ -20,9 +20,11 @@ final class VisibleWindowSweepPlannerTests: XCTestCase {
     private func plan(
         _ windows: [WindowDescriptor], focused: FrontmostContext? = nil,
         exclusions: ExclusionSet = ExclusionSet(rules: []),
+        capabilities: AppCaptureCapabilities = AppCaptureCapabilities(),
         config: VisibleWindowSweepConfig = VisibleWindowSweepConfig()
     ) -> [AmbientWindowTarget] {
-        VisibleWindowSweepPlanner.plan(windows: windows, focused: focused, exclusions: exclusions, config: config)
+        VisibleWindowSweepPlanner.plan(windows: windows, focused: focused, exclusions: exclusions,
+                                       capabilities: capabilities, config: config)
     }
 
     func testCapturesAllVisibleNormalWindows() {
@@ -105,6 +107,26 @@ final class VisibleWindowSweepPlannerTests: XCTestCase {
         let targets = plan(windows, config: VisibleWindowSweepConfig(maxWindowsPerSweep: 3))
         // Largest three by area (w = id*100): ids 20, 19, 18.
         XCTAssertEqual(targets.map { $0.windowID }, [20, 19, 18])
+    }
+
+    func testUntitledNonOcrOnlyWindowIsDropped() {
+        // Multi-process apps (Chrome/Notion) register title-less sub-window entries that
+        // can never be captured (AX can't resolve them) — drop them from the plan.
+        let targets = plan([
+            win(1, bundle: "com.google.Chrome", title: "Explore - Arrow"), // titled → kept
+            win(2, bundle: "com.google.Chrome", title: nil),               // untitled Chrome → dropped
+            win(3, bundle: "com.google.Chrome", title: ""),                // empty title → dropped
+        ])
+        XCTAssertEqual(targets.map { $0.windowID }, [1])
+    }
+
+    func testUntitledOcrOnlyWindowIsKept() {
+        // An ocrOnly app CAN capture an untitled window (OCR targets by exact windowID),
+        // so it stays in the plan.
+        let targets = plan([
+            win(1, bundle: "com.microsoft.rdc.macos", app: "Remote Desktop", title: nil), // ocrOnly, untitled
+        ])
+        XCTAssertEqual(targets.map { $0.windowID }, [1])
     }
 
     func testSharingNoneWindowDropsTheWholePid() {
