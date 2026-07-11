@@ -50,7 +50,9 @@ final class AXTextExtractor: TextSnapshotProvider {
 
     func focusedWindowTitle(pid: pid_t) -> String? {
         guard let window = focusedWindow(pid: pid) else { return nil }
-        return stringAttribute(window, kAXTitleAttribute)
+        // Strip loading-spinner/progress glyphs so an animated title doesn't churn
+        // episode boundaries (the episode key includes the window title).
+        return WindowTitleNormalizer.normalize(stringAttribute(window, kAXTitleAttribute))
     }
 
     // MARK: - AX plumbing
