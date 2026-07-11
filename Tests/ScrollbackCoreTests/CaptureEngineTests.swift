@@ -429,6 +429,77 @@ final class CaptureEngineTests: XCTestCase {
         XCTAssertTrue(event.redactionFlags.contains(.creditCard))
     }
 
+    // MARK: Exclusions
+
+    func testNeverCaptureAppOpensNoEpisodeAndCapturesNothing() {
+        let provider = FixtureProvider()
+        let vault = FrontmostContext(pid: 9, bundleID: "com.test.vault", appName: "Vault", windowTitle: "Logins")
+        provider.textByContextKey[vault.key] = "master password hunter2"
+        let sink = RecordingSink()
+        let exclusions = ExclusionSet(rules: [ExclusionRule(type: .app, pattern: "com.test.vault", mode: .neverCapture)])
+        let engine = CaptureEngine(provider: provider, sink: sink, exclusions: exclusions)
+
+        engine.handleAppOrWindowChange(vault, at: at(0))
+        engine.handleAppOrWindowChange(vault, at: at(1)) // re-entry must not reopen
+        engine.handleClipboard("copied from vault", context: vault, at: at(2))
+        engine.handleTextChangeSignal(vault, at: at(3))
+        engine.noteUserActivity(at: at(4))               // must not resume into it
+
+        XCTAssertEqual(sink.opened.count, 0)
+        XCTAssertEqual(sink.events.count, 0)
+        XCTAssertEqual(engine.stats.providerCalls, 0)    // screen never read
+    }
+
+    func testRedactAppRecordsEpisodeButMasksContent() {
+        let provider = FixtureProvider()
+        let journal = FrontmostContext(pid: 8, bundleID: "com.test.journal", appName: "Journal", windowTitle: "Diary")
+        provider.textByContextKey[journal.key] = "today I felt anxious about the launch"
+        let sink = RecordingSink()
+        let exclusions = ExclusionSet(rules: [ExclusionRule(type: .app, pattern: "com.test.journal", mode: .redact)])
+        let engine = CaptureEngine(provider: provider, sink: sink, exclusions: exclusions)
+
+        engine.handleAppOrWindowChange(journal, at: at(0))
+
+        XCTAssertEqual(sink.opened.count, 1) // episode metadata recorded
+        XCTAssertEqual(sink.screenEvents.count, 1)
+        XCTAssertEqual(sink.screenEvents[0].rawText, "[content excluded by redact rule]")
+        XCTAssertFalse(sink.screenEvents[0].rawText.contains("anxious"))
+        XCTAssertEqual(engine.stats.providerCalls, 0) // provider not read for redact
+    }
+
+    func testRedactModeMasksClipboardContent() {
+        let provider = FixtureProvider()
+        let journal = FrontmostContext(pid: 8, bundleID: "com.test.journal", appName: "Journal", windowTitle: "Diary")
+        let sink = RecordingSink()
+        let exclusions = ExclusionSet(rules: [ExclusionRule(type: .app, pattern: "com.test.journal", mode: .redact)])
+        let engine = CaptureEngine(provider: provider, sink: sink, exclusions: exclusions)
+
+        engine.handleClipboard("private secret note I copied", context: journal, at: at(0))
+
+        XCTAssertEqual(sink.clipboardEvents.count, 1)
+        XCTAssertEqual(sink.clipboardEvents[0].rawText, "[content excluded by redact rule]")
+        XCTAssertFalse(sink.clipboardEvents[0].rawText.contains("private"))
+    }
+
+    func testRedactModeMasksWindowTitleInEpisodeMetadata() {
+        // A `.window` redact rule matches ON the title, so the title is the
+        // sensitive datum — it must not be stored verbatim in episode metadata.
+        let provider = FixtureProvider()
+        let bank = FrontmostContext(pid: 7, bundleID: "com.google.Chrome", appName: "Google Chrome",
+                                    windowTitle: "Chase — Acct 1234 — Google Chrome")
+        provider.textByContextKey[bank.key] = "account balance details"
+        let sink = RecordingSink()
+        let exclusions = ExclusionSet(rules: [ExclusionRule(type: .window, pattern: "Chase", mode: .redact)])
+        let engine = CaptureEngine(provider: provider, sink: sink, exclusions: exclusions)
+
+        engine.handleAppOrWindowChange(bank, at: at(0))
+
+        XCTAssertEqual(sink.opened.count, 1)
+        XCTAssertEqual(sink.opened[0].appName, "Google Chrome")             // app still identifiable
+        XCTAssertFalse((sink.opened[0].windowTitle ?? "").contains("Chase"))
+        XCTAssertFalse((sink.opened[0].windowTitle ?? "").contains("1234")) // account number not stored
+    }
+
     func testTabSeparatedClipboardCardIsMaskedNotLeaked() {
         // A card copied from a spreadsheet (tab separators): storing the
         // normalized form means the single redaction pass catches it — rawText

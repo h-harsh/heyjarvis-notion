@@ -21,6 +21,11 @@ public final class CaptureEngine {
     private let sink: CaptureEventSink
     private let config: CaptureConfig
     private let redactor: Redactor
+    private let exclusions: ExclusionSet
+
+    /// Stored in place of content for a `.redact`-mode exclusion: the episode
+    /// (app/window/time) is recorded, the on-screen text is not.
+    static let redactedContentPlaceholder = "[content excluded by redact rule]"
 
     public private(set) var stats = CaptureStats()
 
@@ -42,12 +47,14 @@ public final class CaptureEngine {
         provider: TextSnapshotProvider,
         sink: CaptureEventSink,
         config: CaptureConfig = CaptureConfig(),
-        redactor: Redactor = Redactor()
+        redactor: Redactor = Redactor(),
+        exclusions: ExclusionSet = ExclusionSet()
     ) {
         self.provider = provider
         self.sink = sink
         self.config = config
         self.redactor = redactor
+        self.exclusions = exclusions
     }
 
     // MARK: - Triggers
@@ -55,6 +62,15 @@ public final class CaptureEngine {
     /// App switch or window/title change (user activity).
     public func handleAppOrWindowChange(_ context: FrontmostContext, at now: Date) {
         noteActivity(at: now)
+        // Excluded app/window: close any open episode, remember where we are (so
+        // stray content signals for it are ignored), but open nothing. Checked
+        // BEFORE the same-key branch so a re-entered excluded window can't reopen.
+        if exclusions.mode(for: context) == .neverCapture {
+            pendingTyping = nil
+            closeEpisode(at: now)
+            currentContext = context
+            return
+        }
         if currentContext?.key == context.key {
             currentContext = context
             if currentEpisode == nil {           // resuming in the same window after idle
@@ -89,14 +105,19 @@ public final class CaptureEngine {
     /// skipping concealed/transient pasteboard types (password managers).
     public func handleClipboard(_ content: String, context: FrontmostContext, at now: Date) {
         noteActivity(at: now)
+        let mode = exclusions.mode(for: context)
+        guard mode != .neverCapture else { return } // never store a copy from an excluded app
         ensureEpisode(context, at: now)
         // Store the NORMALIZED copy (whitespace collapsed): it feeds the same
         // single redaction pass as screen text, so a card/secret copied with tab,
         // newline, or NBSP separators can't slip past the space/dash-only patterns
-        // by staying in a verbatim form the hash pass would have masked.
-        let normalized = TextNormalizer.normalize(String(content.prefix(config.maxTextLength)))
+        // by staying in a verbatim form the hash pass would have masked. A redact
+        // rule stores only the placeholder.
+        let storeText = (mode == .redact)
+            ? CaptureEngine.redactedContentPlaceholder
+            : TextNormalizer.normalize(String(content.prefix(config.maxTextLength)))
         emit(
-            storeText: normalized,
+            storeText: storeText,
             type: .clipboard,
             source: .ax,
             confidence: 1.0,
@@ -111,6 +132,7 @@ public final class CaptureEngine {
     public func noteUserActivity(at now: Date) {
         noteActivity(at: now)
         if let context = currentContext, currentEpisode == nil {
+            guard exclusions.mode(for: context) != .neverCapture else { return } // don't resume into an excluded window
             openEpisode(context, at: now)
             capture(context, at: now)
         }
@@ -163,15 +185,20 @@ public final class CaptureEngine {
     }
 
     private func openEpisode(_ context: FrontmostContext, at now: Date) {
+        // For a redact rule, the window title can itself be the sensitive datum the
+        // rule matched on (a `.window` rule on "Chase — Acct 1234"), so mask it in
+        // the stored metadata too — not just the on-screen content. The app is
+        // still identifiable by bundleID/appName; the specific window is not.
+        let redactTitle = exclusions.mode(for: context) == .redact
         let episode = Episode(
             tsStart: now,
             tsEnd: now,
             bundleID: context.bundleID,
             appName: context.appName,
-            windowTitle: context.windowTitle
+            windowTitle: redactTitle ? CaptureEngine.redactedContentPlaceholder : context.windowTitle
         )
         currentEpisode = episode
-        currentContext = context
+        currentContext = context // real context retained for window-change/dedup matching
         lastHashByContext.removeAll(keepingCapacity: true) // per-episode dedup scope
         stats.episodesOpened += 1
         sink.episodeOpened(episode)
@@ -189,7 +216,21 @@ public final class CaptureEngine {
 
     private func capture(_ context: FrontmostContext, at now: Date) {
         guard currentEpisode != nil else { return }
+        let mode = exclusions.mode(for: context)
+        guard mode != .neverCapture else { return } // defense in depth (episode shouldn't exist)
         lastCaptureAttempt = now
+
+        // Redact rule: record the episode but not the screen text — don't even read
+        // the provider (no reason to pull pixels/AX we're going to throw away).
+        guard mode != .redact else {
+            emit(
+                storeText: CaptureEngine.redactedContentPlaceholder,
+                type: .screenText, source: .ax, confidence: 1.0,
+                dedupKey: context.key, at: now
+            )
+            return
+        }
+
         stats.providerCalls += 1
         if isIdle { stats.idleProviderCalls += 1 } // invariant: never happens
 

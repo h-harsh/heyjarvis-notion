@@ -70,6 +70,10 @@ final class VisionOCRExtractor: TextSnapshotProvider {
     }
 
     func snapshot(for context: FrontmostContext) -> CapturedText? {
+        // Runtime suppressors (secure input active, NSWindowSharingNone). A
+        // sharing-none window is excluded from ScreenCaptureKit anyway, but check
+        // up front so we never even take the screenshot.
+        guard !CaptureGuards.shouldSuppressCapture(pid: context.pid) else { return nil }
         // Cheap gate: if Screen Recording isn't granted, don't attempt anything.
         guard CGPreflightScreenCaptureAccess() else { return nil }
         guard let image = captureWindowImage(pid: context.pid, title: context.windowTitle) else { return nil }

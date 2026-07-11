@@ -31,6 +31,10 @@ final class AXTextExtractor: TextSnapshotProvider {
     }
 
     func snapshot(for context: FrontmostContext) -> CapturedText? {
+        // Runtime suppressors (secure input active, NSWindowSharingNone) — read
+        // nothing rather than the window's text. Pattern exclusions are handled
+        // upstream in the engine's ExclusionSet.
+        guard !CaptureGuards.shouldSuppressCapture(pid: context.pid) else { return nil }
         guard let window = focusedWindow(pid: context.pid) else { return nil }
         var parts: [String] = []
         var nodesVisited = 0
