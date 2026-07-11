@@ -16,6 +16,14 @@ final class AXTextExtractor: TextSnapshotProvider {
     private let maxDepth: Int
     private let maxTotalChars: Int
 
+    /// Short-lived cache of the resolved focused window per pid. A window change
+    /// fetches the title then, moments later, the text — both go through
+    /// `focusedWindow(pid:)`, so caching for one run-loop turn removes the
+    /// second redundant `kAXFocusedWindow` round-trip without risking staleness
+    /// (a real window switch fires a notification that supersedes this anyway).
+    private var windowCache: (pid: pid_t, window: AXUIElement, at: Date)?
+    private let windowCacheTTL: TimeInterval = 0.2
+
     init(maxNodes: Int = 2500, maxDepth: Int = 40, maxTotalChars: Int = 200_000) {
         self.maxNodes = maxNodes
         self.maxDepth = maxDepth
@@ -40,13 +48,20 @@ final class AXTextExtractor: TextSnapshotProvider {
     // MARK: - AX plumbing
 
     private func focusedWindow(pid: pid_t) -> AXUIElement? {
+        if let cached = windowCache, cached.pid == pid,
+           Date().timeIntervalSince(cached.at) < windowCacheTTL {
+            return cached.window
+        }
         let app = AXUIElementCreateApplication(pid)
         var ref: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &ref)
         guard err == .success, let value = ref, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            windowCache = nil
             return nil
         }
-        return (value as! AXUIElement)
+        let window = (value as! AXUIElement)
+        windowCache = (pid, window, Date())
+        return window
     }
 
     private func walk(
@@ -59,20 +74,23 @@ final class AXTextExtractor: TextSnapshotProvider {
         nodes += 1
         guard nodes <= maxNodes, depth <= maxDepth, chars <= maxTotalChars else { return }
 
+        // One IPC round-trip for all four text attributes instead of four.
+        let attrs = stringAttributes(element, [
+            kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXValueAttribute,
+        ])
+
         // Never read secure fields — skip the whole subtree. Checks BOTH role
         // and subrole (a password field's role is "AXTextField", subrole
         // "AXSecureTextField").
-        let role = stringAttribute(element, kAXRoleAttribute)
-        let subrole = stringAttribute(element, kAXSubroleAttribute)
-        if AXCapturePolicy.isSecureField(role: role, subrole: subrole) {
+        if AXCapturePolicy.isSecureField(role: attrs[kAXRoleAttribute], subrole: attrs[kAXSubroleAttribute]) {
             return
         }
 
-        if let title = stringAttribute(element, kAXTitleAttribute), !title.isEmpty {
+        if let title = attrs[kAXTitleAttribute], !title.isEmpty {
             parts.append(title)
             chars += title.count
         }
-        if let value = stringAttribute(element, kAXValueAttribute), !value.isEmpty {
+        if let value = attrs[kAXValueAttribute], !value.isEmpty {
             parts.append(value)
             chars += value.count
         }
@@ -89,6 +107,18 @@ final class AXTextExtractor: TextSnapshotProvider {
             return nil
         }
         return ref as? String
+    }
+
+    /// Fetches several attributes in one round-trip. Attributes with no value
+    /// (or an error) come back as non-string placeholders and are dropped by the
+    /// `as? String` cast, so the returned dict holds only present string values.
+    private func stringAttributes(_ element: AXUIElement, _ attributes: [String]) -> [String: String] {
+        var valuesRef: CFArray?
+        let err = AXUIElementCopyMultipleAttributeValues(
+            element, attributes as CFArray, AXCopyMultipleAttributeOptions(), &valuesRef
+        )
+        guard err == .success, let values = valuesRef as? [Any] else { return [:] }
+        return AXAttributes.stringValues(attributes: attributes, values: values)
     }
 
     private func childElements(_ element: AXUIElement) -> [AXUIElement] {

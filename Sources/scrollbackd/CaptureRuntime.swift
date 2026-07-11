@@ -75,9 +75,11 @@ final class CaptureRuntime: NSObject {
     private var pasteboardTimer: Timer?
     private var heartbeatTimer: Timer?
     private var debounceTimer: Timer?
+    private var titleRefreshTimer: Timer?
 
     private let heartbeatInterval: TimeInterval = 30
     private let pasteboardProbeInterval: TimeInterval = 2
+    private let titleRefreshDebounce: TimeInterval = 0.5
 
     init(engine: CaptureEngine, extractor: AXTextExtractor, idleThreshold: TimeInterval = 300) {
         self.engine = engine
@@ -150,8 +152,10 @@ final class CaptureRuntime: NSObject {
 
     fileprivate func handleAXNotification(_ name: String) {
         switch name {
-        case kAXFocusedWindowChangedNotification, kAXTitleChangedNotification:
-            refreshFrontmost()
+        case kAXFocusedWindowChangedNotification:
+            refreshFrontmost() // real window switch — act immediately
+        case kAXTitleChangedNotification:
+            scheduleTitleRefresh() // coalesce title ticks (unread counts, clocks, progress)
         case kAXValueChangedNotification, kAXFocusedUIElementChangedNotification:
             guard let context = currentContext else { return }
             let deadline = engine.handleTextChangeSignal(context, at: Date())
@@ -161,9 +165,27 @@ final class CaptureRuntime: NSObject {
         }
     }
 
+    @objc private func titleRefreshFired() {
+        titleRefreshTimer = nil
+        refreshFrontmost()
+    }
+
+    /// Collapse a burst of title changes into a single refresh after a quiet
+    /// period, so a title-ticking app doesn't churn one episode + full AX walk
+    /// per tick. The first tick in a burst schedules; the rest are dropped.
+    private func scheduleTitleRefresh() {
+        guard titleRefreshTimer == nil else { return }
+        titleRefreshTimer = Timer.scheduledTimer(
+            timeInterval: titleRefreshDebounce, target: self,
+            selector: #selector(titleRefreshFired), userInfo: nil, repeats: false
+        )
+    }
+
     // MARK: - Wiring
 
     private func refreshFrontmost() {
+        titleRefreshTimer?.invalidate()
+        titleRefreshTimer = nil
         guard let context = makeFrontmostContext(extractor: extractor) else { return }
         currentContext = context
         engine.handleAppOrWindowChange(context, at: Date())

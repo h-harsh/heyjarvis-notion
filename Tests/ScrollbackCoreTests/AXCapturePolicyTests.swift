@@ -21,4 +21,19 @@ final class AXCapturePolicyTests: XCTestCase {
         XCTAssertFalse(AXCapturePolicy.isSecureField(role: "AXStaticText", subrole: "AXContentText"))
         XCTAssertFalse(AXCapturePolicy.isSecureField(role: nil, subrole: nil))
     }
+
+    // MARK: Batched AX read parsing (guards the multi-attribute round-trip)
+
+    func testStringValuesKeepsOnlyStringsInRequestedOrder() {
+        let attributes = ["AXRole", "AXSubrole", "AXTitle", "AXValue"]
+        // A no-value/error placeholder comes back as a non-string object (here 0).
+        let values: [Any] = ["AXTextField", 0, "My Title", "Body text"]
+        let out = AXAttributes.stringValues(attributes: attributes, values: values)
+        XCTAssertEqual(out, ["AXRole": "AXTextField", "AXTitle": "My Title", "AXValue": "Body text"])
+        XCTAssertNil(out["AXSubrole"]) // placeholder dropped, not misindexed onto another key
+    }
+
+    func testStringValuesMisalignedArraysReturnEmpty() {
+        XCTAssertTrue(AXAttributes.stringValues(attributes: ["a", "b"], values: ["x"]).isEmpty)
+    }
 }

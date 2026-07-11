@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:heyjarvis-notion}",
+            "name": "Debug scrollbackd",
+            "target": "scrollbackd",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug scrollbackd"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:heyjarvis-notion}",
+            "name": "Release scrollbackd",
+            "target": "scrollbackd",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release scrollbackd"
+        }
+    ]
+}

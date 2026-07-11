@@ -128,6 +128,28 @@ public enum AXCapturePolicy {
     }
 }
 
+/// Parsing for batched Accessibility reads. Pure + public so the risky part of
+/// the AX multi-attribute round-trip — aligning the parallel results array to
+/// the requested attributes and dropping error/no-value placeholders — has an
+/// automated test (the IPC call itself needs a TCC grant and can't run in CI).
+public enum AXAttributes {
+    /// Pairs a `values` array (as returned by
+    /// `AXUIElementCopyMultipleAttributeValues`, parallel to `attributes`) with
+    /// its attribute names, keeping only entries whose value is a String —
+    /// error / no-value placeholders come back as non-string objects and are
+    /// dropped. Returns empty if the arrays are misaligned.
+    public static func stringValues(attributes: [String], values: [Any]) -> [String: String] {
+        guard attributes.count == values.count else { return [:] }
+        var out: [String: String] = [:]
+        for (index, attribute) in attributes.enumerated() {
+            if let string = values[index] as? String {
+                out[attribute] = string
+            }
+        }
+        return out
+    }
+}
+
 /// Whitespace-normalization + hashing used for capture-time dedup.
 public enum TextNormalizer {
     /// Collapses all whitespace runs to single spaces and trims.

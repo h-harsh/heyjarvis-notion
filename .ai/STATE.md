@@ -1,16 +1,16 @@
 # STATE — Scrollback — 2026-07-11
 
 ## Now
-M1 capture core underway. Capture spike shipped + hardened. Next concrete step: the **capture perf pass** (batch AX reads via `AXUIElementCopyMultipleAttributeValues`, stop double window-fetch, coalesce title-change churn) — required to hold the M1 <5% CPU gate on heavy-AX apps.
+M1 capture core. Capture spike + perf pass shipped. Next concrete step: **Apple Vision OCR fallback** behind the `CapturedText` / `TextSnapshotProvider` seam — for AX-opaque surfaces (Electron quirks, remote desktops, canvases), with a per-app capability matrix. OCR text must be labelled `source: .ocr` (the seam already supports it), never `.ax`.
 
 ## Just finished
-- Event-driven capture spike: `CaptureEngine` (episodes, typing debounce, per-episode hash dedup, idle, activity-gated fallback — no fixed-interval polling) in ScrollbackCore; AX-tree extractor + main-run-loop `CaptureRuntime` (NSWorkspace + AXObserver + pasteboard probe + CGEvent idle) + throwaway JSONL sink + self-asserting `simulate` in scrollbackd. 29 tests green; verify check #4 = the fixture drive.
-- 8-angle code review (35 findings) run before commit. Fixed all correctness/security: **secure-field guard was checking role vs a subrole value → would have captured passwords** (now `AXCapturePolicy`, unit-tested); app-driven content changes no longer defeat idle; resume-after-idle reopens episodes; tsEnd can't regress; SIGINT flushes the open episode; observedPID set only on observer-create success; JSONL rotates per day; provider protocol widened (`CapturedText`) for the imminent OCR task. Deferred perf findings → new TODO task.
+- Capture perf pass (the deferred review findings): batched AX reads via `AXUIElementCopyMultipleAttributeValues` (2 IPC/node instead of 5); short-TTL focused-window cache (kills the double window-fetch per window change); `kAXTitleChanged` debounced 0.5s so title-ticking apps don't churn an episode + full AX walk per tick. Batched-read parse extracted to a pure, unit-tested `AXAttributes.stringValues`. 31 tests green; `simulate` exact; networking clean.
+- Prior: event-driven capture spike + 8-angle review hardening (secure-field subrole fix, idle vs content separation, resume-after-idle, tsEnd guard, SIGINT flush).
 
 ## Blocked / Open questions
 - **Founder actions, time-critical:** register getscrollback.com (squattable); enroll Apple Developer Program (lead time).
 - **Dated:** Otter.AI MTD hearing Jul 15 — tripwire task in TODO Now.
-- Note: this dev machine already has the Accessibility grant, so bare `swift run scrollbackd` runs live/hangs — automation uses `simulate` only (verify skill enforces this).
+- **Live-AX verification pending a re-granted binary:** rebuilds drop the dev binary's Accessibility TCC grant, so `ax-dump` / live capture and the CPU-trace confirmation of the perf pass need a manual granted run (folds into the M1 gate run task). Automation stays on `simulate`.
 
 ## Next up
-- Capture perf pass (above). Then: Apple Vision OCR fallback behind the new `CapturedText`/`TextSnapshotProvider` seam; redact-mode stage; chunker + capture-time dedup + volume/vector counters; encrypted store (SQLCipher + SE key) before real dogfood data persists.
+- OCR fallback (above) → redact-mode stage → chunker + capture-time dedup + volume/vector counters → encrypted store (SQLCipher + SE key) before real dogfood data persists.
