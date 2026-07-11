@@ -1,16 +1,16 @@
 # STATE — Scrollback — 2026-07-11
 
 ## Now
-Plan-completeness audit done; TODO.md rewritten in full (complete decomposition, M1→M6 + ops). **Awaiting founder's go to start implementation.** First engineering task on go: the event-driven AX-tree capture spike (now incl. clipboard trigger + idle fallback). Requires the Accessibility TCC grant at dev time.
+M1 capture core underway. Capture spike shipped + hardened. Next concrete step: the **capture perf pass** (batch AX reads via `AXUIElementCopyMultipleAttributeValues`, stop double window-fetch, coalesce title-change churn) — required to hold the M1 <5% CPU gate on heavy-AX apps.
 
 ## Just finished
-- 4-auditor coverage review of the plan: ~20 missing + ~20 partial commitments found and fixed. Biggest catches: entire audio lane unwritten (now M1.5 with consent bundled), model-download egress had no legal home (now a minimal courier bootstrap in M1, which also lands egress_ledger at first egress), encrypted store resequenced before dogfood data, daemon socket API + LaunchAgent + chunking/redact connective tissue added, oversized M1 tasks split. Corrections logged in docs/decisions.md.
-- SwiftPM skeleton green (build/test/run verified); verify skill live (5 checks).
+- Event-driven capture spike: `CaptureEngine` (episodes, typing debounce, per-episode hash dedup, idle, activity-gated fallback — no fixed-interval polling) in ScrollbackCore; AX-tree extractor + main-run-loop `CaptureRuntime` (NSWorkspace + AXObserver + pasteboard probe + CGEvent idle) + throwaway JSONL sink + self-asserting `simulate` in scrollbackd. 29 tests green; verify check #4 = the fixture drive.
+- 8-angle code review (35 findings) run before commit. Fixed all correctness/security: **secure-field guard was checking role vs a subrole value → would have captured passwords** (now `AXCapturePolicy`, unit-tested); app-driven content changes no longer defeat idle; resume-after-idle reopens episodes; tsEnd can't regress; SIGINT flushes the open episode; observedPID set only on observer-create success; JSONL rotates per day; provider protocol widened (`CapturedText`) for the imminent OCR task. Deferred perf findings → new TODO task.
 
 ## Blocked / Open questions
-- **Founder actions, time-critical:** register getscrollback.com (squattable — was unregistered 2026-07-10); enroll Apple Developer Program (lead time before M4).
+- **Founder actions, time-critical:** register getscrollback.com (squattable); enroll Apple Developer Program (lead time).
 - **Dated:** Otter.AI MTD hearing Jul 15 — tripwire task in TODO Now.
-- Watch-list: pricing ($15/mo assumed), trademark screen (M6, start early), Claude auto-memory MCP-absorption test (M2).
+- Note: this dev machine already has the Accessibility grant, so bare `swift run scrollbackd` runs live/hangs — automation uses `simulate` only (verify skill enforces this).
 
-## Next up (on go)
-1. AX capture spike (+ clipboard/idle triggers) → 2. redact stage → 3. chunker + capture-time dedup + volume/vector counters — per the dependency-ordered M1 list in TODO.md.
+## Next up
+- Capture perf pass (above). Then: Apple Vision OCR fallback behind the new `CapturedText`/`TextSnapshotProvider` seam; redact-mode stage; chunker + capture-time dedup + volume/vector counters; encrypted store (SQLCipher + SE key) before real dogfood data persists.

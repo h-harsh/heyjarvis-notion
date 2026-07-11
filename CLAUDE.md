@@ -18,7 +18,9 @@ Full product context: [PRD.md](PRD.md). Architecture & decisions: [tech-spec.md]
 ```
 swift build                     # build SPM targets (ScrollbackCore lib, scrollbackd)
 swift test                      # run the test suite (XCTest)
-swift run scrollbackd           # run the capture daemon (skeleton for now)
+swift run scrollbackd simulate  # deterministic capture-engine drive (verify gate; no TCC)
+swift run scrollbackd ax-dump   # one-shot: dump frontmost-window AX text (needs Accessibility grant)
+swift run scrollbackd           # LIVE capture — hangs until Ctrl-C; needs Accessibility grant. Not for automation.
 swiftlint                       # optional lint; PostToolUse hook runs it per-file if installed
 # xcodebuild -scheme Scrollback # (later, M4) build the menu-bar app shell — not created yet
 ```

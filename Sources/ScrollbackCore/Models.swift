@@ -73,6 +73,9 @@ public struct CaptureEvent: Codable, Sendable, Identifiable, Equatable {
     public var source: CaptureSource
     public var confidence: Double
     public var rawText: String
+    /// SHA-256 (hex) of the normalized text — the capture-time dedup probe
+    /// (mirrors `events.text_hash` in the schema).
+    public var textHash: String?
     /// Defaults to `.untrustedAmbient` — the security invariant. Callers that
     /// have genuinely trusted input must set it explicitly.
     public var provenance: Provenance
@@ -85,6 +88,7 @@ public struct CaptureEvent: Codable, Sendable, Identifiable, Equatable {
         source: CaptureSource,
         confidence: Double = 1.0,
         rawText: String,
+        textHash: String? = nil,
         provenance: Provenance = .untrustedAmbient
     ) {
         self.id = id
@@ -94,6 +98,7 @@ public struct CaptureEvent: Codable, Sendable, Identifiable, Equatable {
         self.source = source
         self.confidence = confidence
         self.rawText = rawText
+        self.textHash = textHash
         self.provenance = provenance
     }
 }

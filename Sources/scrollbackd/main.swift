@@ -3,9 +3,33 @@ import ScrollbackCore
 
 // scrollbackd — the capture + index daemon.
 //
-// This is a versioned skeleton. The event-driven Accessibility-tree capture loop
-// (AX notifications + app-switch + typing-pause triggers) lands in the next M1
-// increment. By design this target links NO networking: all egress flows through
-// scrollback-courier. See CLAUDE.md (Architecture) and docs/decisions.md.
+// Modes:
+//   run       (default) live event-driven capture → throwaway JSONL spike store
+//   simulate  deterministic fixture replay through the real engine (verify check #4)
+//   ax-dump   one-shot diagnostic: extract the frontmost window's AX text
+//
+// By design this target links NO networking — all egress flows through
+// scrollback-courier. See CLAUDE.md (Architecture) and verify check #5.
 
-print("scrollbackd \(scrollbackCoreVersion) — capture daemon (skeleton; capture loop pending)")
+let arguments = CommandLine.arguments.dropFirst()
+
+switch arguments.first {
+case "simulate":
+    exit(runSimulation())
+case "ax-dump":
+    exit(runAXDump())
+case "--version", "version":
+    print("scrollbackd \(scrollbackCoreVersion)")
+    exit(0)
+case nil, "run":
+    runDaemon()
+default:
+    print("""
+    scrollbackd \(scrollbackCoreVersion)
+    usage: scrollbackd [run|simulate|ax-dump|--version]
+      run       (default) live event-driven capture → throwaway JSONL spike store
+      simulate  deterministic fixture replay through the real engine
+      ax-dump   one-shot: extract the frontmost window's AX text
+    """)
+    exit(64)
+}

@@ -16,10 +16,12 @@ Observe: ends with `Build complete!` and exit code 0. Any compile error → fail
 
 ### 2. Tests
 Run: `swift test`
-Observe: final line `Executed N tests, with 0 failures` (N ≥ 6 today) and exit 0.
+Observe: final line `Executed N tests, with 0 failures` (N ≥ 29 today) and exit 0.
 This is where the load-bearing invariants are asserted with exact values:
 - `RankFusion` fuses to exact RRF scores and a deterministic tie-break order.
 - `CaptureEvent.provenance` defaults to `.untrustedAmbient` (the security invariant).
+- `AXCapturePolicy.isSecureField` treats subrole `AXSecureTextField` as secure — the never-read-passwords guard (a broken guard fails here, not in production).
+- `CaptureEngine`: episodes open/close on context change and idle, resume-after-idle reopen, app-driven content changes do NOT defeat idle, typing debounce (rolling + cleared-on-window-switch), per-episode hash dedup, clipboard verbatim capture, idle suppression (`idleProviderCalls == 0`), tsEnd never regresses, activity-gated fallback (never fixed-interval).
 Adding capture/store/filing code MUST add tests here — a green build alone never counts.
 
 ### 3. Lint (only if installed)
@@ -28,10 +30,15 @@ Observe: no violations if present; "skipped" if absent. Absence is NOT a failure
 
 ## Dynamic drive
 
-### 4. Daemon boots
-Run: `swift run scrollbackd`
-Observe: stdout is exactly `scrollbackd <version> — capture daemon (skeleton; capture loop pending)` and exit 0.
-(Replace this with a real capture assertion once the capture loop exists — see below.)
+### 4. Capture engine drives correctly (fixture simulate — the real engine, no TCC needed)
+Run: `swift run scrollbackd simulate`
+Observe: exit 0 and the exact line
+`simulate OK: episodes_opened=3 episodes_closed=3 screen_events=4 clipboard_events=1 dedup_skips=1 provider_calls=5 idle_provider_calls=0`
+The binary replays a fixed workday fixture through the real `CaptureEngine` and self-asserts (any mismatch prints expected/actual and exits 1). `idle_provider_calls=0` is the "idle runs zero capture cycles" launch invariant, observed. This is the ONLY automated gate for capture — it always terminates.
+
+**Do NOT run bare `swift run scrollbackd` (no args) in automation.** On a machine where Accessibility is already granted it enters the capture run loop and never exits (it hangs the verify); on an ungranted machine it prints guidance and exits 3. Neither is a usable automated assertion — use `simulate`.
+
+**Manual (TCC-gated, founder's machine only, run by hand and reported explicitly):** `swift run scrollbackd ax-dump` → prints the frontmost window's extracted text (secure fields excluded — regression-guarded by the `AXCapturePolicyTests` unit test in gate #2); `swift run scrollbackd` → live JSONL capture in `~/Library/Application Support/Scrollback/spike/` (Ctrl-C flushes the final episode). State explicitly if these weren't run — never imply live capture was observed when only `simulate` ran.
 
 ### 5. Capture/index code links NO networking (Never rule #1)
 Run: `grep -rnE 'URLSession|NWConnection|NWListener|NWBrowser|CFSocket|CFStream|getaddrinfo|SocketPort' Sources/scrollbackd Sources/ScrollbackCore`
