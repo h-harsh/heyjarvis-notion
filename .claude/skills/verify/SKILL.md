@@ -16,12 +16,13 @@ Observe: ends with `Build complete!` and exit code 0. Any compile error → fail
 
 ### 2. Tests
 Run: `swift test`
-Observe: final line `Executed N tests, with 0 failures` (N ≥ 103 today) and exit 0.
+Observe: final line `Executed N tests, with 0 failures` (N ≥ 111 today) and exit 0.
 This is where the load-bearing invariants are asserted with exact values:
 - `RankFusion` fuses to exact RRF scores and a deterministic tie-break order.
 - `CaptureEvent.provenance` defaults to `.untrustedAmbient` (the security invariant).
 - `AXCapturePolicy.isSecureField` treats subrole `AXSecureTextField` as secure — the never-read-passwords guard (a broken guard fails here, not in production).
 - `CaptureEngine`: episodes open/close on context change and idle, resume-after-idle reopen, app-driven content changes do NOT defeat idle, typing debounce (rolling + cleared-on-window-switch), per-episode hash dedup, clipboard verbatim capture, idle suppression (`idleProviderCalls == 0`), tsEnd never regresses, activity-gated fallback (never fixed-interval).
+- **Key-custody policy:** `KeyCustodyPolicy` (pure, clock-injected) returns LOCKED before unlock and after `sessionTimeout` (12h), rate-limits unwrap attempts (sliding window trips the limit; a successful unlock resets it). The SE-hardware unwrap + SQLCipher key application are live-only (signed build), NOT covered here.
 - **Catalog store:** `SQLiteCatalogStore` migrates the full schema (idempotent on reopen, `user_version`-gated), round-trips episodes/events/chunks, cascades deletes (episode → events → chunks → FTS via triggers), and FTS-searches chunk text. Parameterized queries throughout. Encryption-transparent (SQLCipher swap is one isolated spot).
 - **Chunker:** `Chunker` splits event text into target-range chunks (sentence-packed, oversized sentences hard-split by word, no content lost) carrying event FKs + source; `ChunkingStage` dedups identical re-read text by normalized hash (stored once) and tracks volume counters (raw vs stored chars, chunks = vector count, per-hour buckets).
 - **Exclusions:** `ExclusionSet` resolves a context to `neverCapture`/`redact`/`capture` (strictest wins); defaults exclude password managers, the Claude Desktop app, and incognito window titles, but NOT ordinary apps (`com.apple.Safari`/Slack stay capturable — guards the golden line); in `CaptureEngine`, a `neverCapture` app opens **no episode and stores nothing** across app-switch/clipboard/resume/fallback paths, and a `redact` app records the episode but stores a placeholder (provider never read).
