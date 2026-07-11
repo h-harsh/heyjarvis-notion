@@ -61,7 +61,29 @@ final class ChunkerTests: XCTestCase {
         XCTAssertEqual(chunks[0].source, .ocr)
         XCTAssertEqual(chunks[0].tsCapture, e.ts)
         XCTAssertEqual(chunks[0].tokenCount, 3)
-        XCTAssertNil(chunks[0].tsEvent) // filled later by dual-timestamp extraction
+        XCTAssertNil(chunks[0].tsEvent) // no date reference in the text
+    }
+
+    func testChunkFillsTsEventFromDatedText() {
+        // The dual-timestamp pass runs during chunking: a dated chunk carries both
+        // ts_capture (when seen) and ts_event (what it refers to).
+        let utc = TimeZone(identifier: "UTC")!
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = utc
+        let captured = cal.date(from: DateComponents(year: 2026, month: 1, day: 5, hour: 10))! // Monday
+        let chunker = Chunker(
+            targetTokens: 50, maxTokens: 80, estimateTokens: wordCount,
+            eventTime: EventTimeExtractor(timeZone: utc)
+        )
+        let chunks = chunker.chunk(event("team agreed to move the launch to Friday", ts: captured))
+        XCTAssertEqual(chunks.count, 1)
+        XCTAssertEqual(chunks[0].tsCapture, captured)
+        XCTAssertEqual(chunks[0].tsEvent, cal.date(from: DateComponents(year: 2026, month: 1, day: 9))!)
+    }
+
+    func testChunkTsEventNilWhenExtractorDisabled() {
+        let chunker = Chunker(targetTokens: 50, maxTokens: 80, estimateTokens: wordCount, eventTime: nil)
+        let chunks = chunker.chunk(event("move the launch to Friday"))
+        XCTAssertNil(chunks[0].tsEvent)
     }
 
     func testDefaultEstimateIsNonZeroAndScales() {

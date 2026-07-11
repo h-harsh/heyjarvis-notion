@@ -13,15 +13,18 @@ public struct Chunker: Sendable {
     public let targetTokens: Int
     public let maxTokens: Int
     private let estimateTokens: @Sendable (String) -> Int
+    private let eventTime: EventTimeExtractor?
 
     public init(
         targetTokens: Int = 768,
         maxTokens: Int = 1024,
-        estimateTokens: @escaping @Sendable (String) -> Int = Chunker.defaultEstimate
+        estimateTokens: @escaping @Sendable (String) -> Int = Chunker.defaultEstimate,
+        eventTime: EventTimeExtractor? = EventTimeExtractor()
     ) {
         self.targetTokens = max(1, min(targetTokens, maxTokens))
         self.maxTokens = max(1, maxTokens)
         self.estimateTokens = estimateTokens
+        self.eventTime = eventTime
     }
 
     public func chunk(_ event: CaptureEvent) -> [Chunk] {
@@ -32,7 +35,9 @@ public struct Chunker: Sendable {
                 text: text,
                 tokenCount: estimateTokens(text),
                 tsCapture: event.ts,
-                tsEvent: nil, // filled by the later dual-timestamp extraction pass
+                // Dual timestamp: the event time the chunk REFERS to (if any),
+                // resolved relative to when it was captured. Distinct from tsCapture.
+                tsEvent: eventTime?.eventTime(in: text, capturedAt: event.ts),
                 source: event.source
             )
         }
