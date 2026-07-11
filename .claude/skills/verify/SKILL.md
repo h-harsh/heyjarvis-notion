@@ -16,7 +16,7 @@ Observe: ends with `Build complete!` and exit code 0. Any compile error → fail
 
 ### 2. Tests
 Run: `swift test`
-Observe: final line `Executed N tests, with 0 failures` (N ≥ 329 today) and exit 0.
+Observe: final line `Executed N tests, with 0 failures` (N ≥ 336 today) and exit 0.
 This is where the load-bearing invariants are asserted with exact values:
 - `RankFusion` fuses to exact RRF scores and a deterministic tie-break order.
 - `CaptureEvent.provenance` defaults to `.untrustedAmbient` (the security invariant).

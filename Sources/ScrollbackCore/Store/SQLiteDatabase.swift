@@ -107,6 +107,11 @@ public final class SQLiteDatabase {
     }
 
     public var lastInsertRowID: Int64 { sqlite3_last_insert_rowid(handle) }
+
+    /// Rows changed by the most recently completed statement on this connection. Used
+    /// to detect an idempotent no-op insert (`ON CONFLICT DO NOTHING` → 0) and a
+    /// guarded state transition that didn't apply (`UPDATE … WHERE status=…` → 0).
+    public var changesCount: Int { Int(sqlite3_changes(handle)) }
 }
 
 /// A bound value for a prepared statement.
@@ -173,6 +178,9 @@ public final class Statement {
     }
     public func intOrNil(_ column: Int32) -> Int64? {
         sqlite3_column_type(stmt, column) == SQLITE_NULL ? nil : int(column)
+    }
+    public func doubleOrNil(_ column: Int32) -> Double? {
+        sqlite3_column_type(stmt, column) == SQLITE_NULL ? nil : double(column)
     }
     public func blob(_ column: Int32) -> [UInt8] {
         guard let pointer = sqlite3_column_blob(stmt, column) else { return [] }
