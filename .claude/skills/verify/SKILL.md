@@ -16,7 +16,7 @@ Observe: ends with `Build complete!` and exit code 0. Any compile error → fail
 
 ### 2. Tests
 Run: `swift test`
-Observe: final line `Executed N tests, with 0 failures` (N ≥ 264 today) and exit 0.
+Observe: final line `Executed N tests, with 0 failures` (N ≥ 327 today) and exit 0.
 This is where the load-bearing invariants are asserted with exact values:
 - `RankFusion` fuses to exact RRF scores and a deterministic tie-break order.
 - `CaptureEvent.provenance` defaults to `.untrustedAmbient` (the security invariant).
@@ -60,6 +60,8 @@ The binary replays a fixed workday fixture through the real `CaptureEngine` and 
 
 **`swift run scrollbackd search "<query>"`** (NOT TCC-gated — reads the local store, no capture) → runs hybrid retrieval over `~/Library/Application Support/Scrollback/store` and prints spotlighted results (or the "no memories yet" message + exit 0 against an empty store). The capture→store→search DATA path is proven headless by `CatalogStoreSinkTests`; this command exercises the CLI wiring.
 
+**`scrollbackd mcp-serve` + `scripts/mcp-probe.py`** (NOT TCC-gated, NO networking — serves recall over the local AF_UNIX socket): the ONLY proof for the live socket transport (framing/token/dispatch logic are headless-tested in `MCPTransportTests`, but the POSIX `socket()`/`accept()`/`read()` edge is not). Run `.build/debug/scrollbackd mcp-serve &` then `python3 scripts/mcp-probe.py` → observe `RESULT: ALL PASS` (file perms 0600, both auth gates close the connection, happy-path hello→tools/list→tools/call over one persistent conn, the transport-vs-application error planes, and the SIGPIPE hardening: the daemon survives dead-peer writes). Then `kill %1`. State explicitly if this wasn't run.
+
 **Manual (TCC-gated, founder's machine only, run by hand and reported explicitly):** `swift run scrollbackd ax-dump` → prints the frontmost window's extracted text (secure fields excluded — regression-guarded by the `AXCapturePolicyTests` unit test in gate #2); `swift run scrollbackd ocr-dump` → screenshots + Vision-OCRs the frontmost window and prints the text (needs the **Screen Recording** grant; the image is discarded post-extraction — zero frames stored); `swift run scrollbackd` → live event-driven capture persisting into the searchable store + JSONL spike (Ctrl-C flushes the final episode + logs volume). After a live run, `scrollbackd search "..."` returns real results. State explicitly if these weren't run — never imply live capture/OCR was observed when only `simulate` ran. The ScreenCaptureKit+Vision path and the async→sync bridge's runtime behaviour are only observable here, not in CI.
 
 ### 5. Capture/index code links NO networking (Never rule #1)
@@ -71,6 +73,6 @@ Observe: **zero matches** (grep exits 1). Any hit = the privacy split is broken;
 These are the product's crown jewels (PRD gates). They can't be observed until the code exists; when a `/build` adds the flow, replace the stub here with a real run→observe check:
 
 - **Capture spike:** feed a fixture AX tree / drive a known window → observe `CaptureEvent`s land in the store; measure `<5% average CPU` over a real hour (the launch gate). <!-- TODO: add when capture loop exists -->
-- **Recall via MCP:** call `search_memory` with a seeded corpus → observe the correct episode in top-3, snippets carry provenance + are spotlighted. <!-- TODO: add at M2 -->
+- **Recall via MCP:** the dispatch + spotlighting + transport are LANDED and verified — `MemoryMCPServiceTests` + `MCPTransportTests` headless, and `scripts/mcp-probe.py` drives the live socket (see step 4). Remaining for full M2: seed a known corpus and assert the correct episode lands top-3 end-to-end through the Node proxy (once `scrollback-mcp` exists).
 - **Filing agent:** run a daily digest over fixtures → observe a draft appears in the queue, re-running does NOT duplicate (idempotent `external_key`), and undo archives the created page. <!-- TODO: add at M3 -->
 - **Permission-gated bits** (Screen/AX/Mic TCC) can't be headless-verified — these stay manual-observation steps, stated as such, never silently skipped.
