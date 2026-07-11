@@ -342,9 +342,16 @@ func runDaemon() -> Never {
         )
         runtime.start()
 
+        // Serve read-only recall over the local socket WHILE capturing — this is what
+        // real usage looks like: Claude queries live memory. A SECOND ShardedCatalog
+        // (its own connections) reads the same WAL store this path writes; non-fatal if
+        // the socket can't bind (capture keeps running).
+        let recallServer = startRecallServerForCaptureDaemon()
+
         // Flush the open episode on Ctrl-C / SIGTERM before exiting, then log the
         // session's capture volume (raw vs deduped chars, chunks/hour) + sweep counters.
         installShutdownHandler {
+            recallServer?.stop()
             runtime.shutdown()
             print("volume: \(sink.summary)")
             print("sweep: \(engine.ambientStats.summary)")
@@ -357,7 +364,7 @@ func runDaemon() -> Never {
         print("capturing (event-driven, all visible windows across displays) → searchable store + JSONL spike")
         print("Ctrl-C to stop. Then try:  scrollbackd search \"something you saw\"")
         print("(plaintext for now — encryption + the embedding model land next.)")
-        withExtendedLifetime((runtime, engine)) {
+        withExtendedLifetime((runtime, engine, recallServer)) {
             RunLoop.main.run()
         }
         exit(0)
