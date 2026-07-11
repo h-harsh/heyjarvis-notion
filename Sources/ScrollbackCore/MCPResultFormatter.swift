@@ -44,22 +44,35 @@ public enum MCPResultFormatter {
         public let snippets: [Snippet]
 
         /// The text an MCP client presents to Claude: the notice, then each snippet
-        /// cited and (if untrusted) fenced. Untrusted content lives ONLY inside a
-        /// fence; trusted content is shown plainly.
-        public var rendered: String {
-            guard !snippets.isEmpty else { return "No matching memories found." }
-            var lines = [notice, ""]
-            for (index, snippet) in snippets.enumerated() {
-                let cite = "[\(index + 1)] \(snippet.source.rawValue) · "
-                    + "\(snippet.ts.timeIntervalSince1970) · episode \(snippet.episodeID.uuidString.prefix(8))"
-                if snippet.spotlighted {
-                    lines.append("\(cite)\n\(openMarker)\(snippet.text)\(closeMarker)")
-                } else {
-                    lines.append("\(cite)\n\(snippet.text)")
-                }
-            }
-            return lines.joined(separator: "\n")
+        /// cited and (if untrusted) fenced. Assembled ONCE here (in the daemon) and
+        /// carried on the wire so the thin proxy forwards it verbatim — the unforgeable
+        /// fences are never re-derived in the (dumb) proxy. Untrusted content lives ONLY
+        /// inside a fence; trusted content is shown plainly.
+        public let rendered: String
+
+        public init(notice: String, snippets: [Snippet]) {
+            self.notice = notice
+            self.snippets = snippets
+            self.rendered = MCPResultFormatter.render(notice: notice, snippets: snippets)
         }
+    }
+
+    /// Assemble the client-facing text. Reserved-marker defanging already happened in
+    /// `format`, so wrapping a spotlighted snippet in `openMarker…closeMarker` yields an
+    /// unforgeable fence (captured text can't contain the markers).
+    static func render(notice: String, snippets: [Snippet]) -> String {
+        guard !snippets.isEmpty else { return "No matching memories found." }
+        var lines = [notice, ""]
+        for (index, snippet) in snippets.enumerated() {
+            let cite = "[\(index + 1)] \(snippet.source.rawValue) · "
+                + "\(snippet.ts.timeIntervalSince1970) · episode \(snippet.episodeID.uuidString.prefix(8))"
+            if snippet.spotlighted {
+                lines.append("\(cite)\n\(openMarker)\(snippet.text)\(closeMarker)")
+            } else {
+                lines.append("\(cite)\n\(snippet.text)")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Format results for the MCP layer. Untrusted-ambient snippets are defanged +

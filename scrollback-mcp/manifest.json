@@ -1,0 +1,22 @@
+{
+  "manifest_version": "0.2",
+  "name": "scrollback",
+  "display_name": "Scrollback",
+  "version": "0.1.0",
+  "description": "Local-first ambient memory — search your on-device screen/audio capture. Read-only; all data stays on the Mac.",
+  "author": { "name": "Scrollback" },
+  "server": {
+    "type": "node",
+    "entry_point": "index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/index.js"]
+    }
+  },
+  "tools": [
+    { "name": "search_memory", "description": "Search on-device ambient memory (screen + audio) for spans matching a query." },
+    { "name": "recent_activity", "description": "A chronological digest of recent activity in a time window." }
+  ],
+  "keywords": ["memory", "local-first", "privacy", "recall"],
+  "license": "MIT"
+}

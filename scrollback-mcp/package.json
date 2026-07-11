@@ -1,0 +1,13 @@
+{
+  "name": "scrollback-mcp",
+  "version": "0.1.0",
+  "description": "Thin MCP stdio proxy forwarding tool calls to the scrollbackd recall socket. Key custody never leaves the daemon.",
+  "type": "commonjs",
+  "bin": { "scrollback-mcp": "index.js" },
+  "main": "index.js",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "license": "MIT",
+  "engines": { "node": ">=18" }
+}
